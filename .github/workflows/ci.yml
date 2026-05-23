@@ -102,27 +102,21 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Generate changelog
-        id: changelog
-        run: |
-          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
-          if [ -n "$PREV" ]; then
-            LOG=$(git log "${PREV}..HEAD" --pretty=format:"- %s (%h)" --no-merges)
-          else
-            LOG=$(git log --pretty=format:"- %s (%h)" --no-merges -20)
-          fi
-          echo "body<<EOF" >> "$GITHUB_OUTPUT"
-          echo "## Changes" >> "$GITHUB_OUTPUT"
-          echo "" >> "$GITHUB_OUTPUT"
-          echo "$LOG" >> "$GITHUB_OUTPUT"
-          echo "" >> "$GITHUB_OUTPUT"
-          echo "## Docker Image" >> "$GITHUB_OUTPUT"
-          echo "" >> "$GITHUB_OUTPUT"
-          echo "\`ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME}\`" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: false
-          body: ${{ steps.changelog.outputs.body }}
+          generate_release_notes: true
+          body: |
+            ### Docker Image
+
+            ```
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ```
+
+            ### Install
+
+            ```bash
+            helm install nvelox-ingress-controller deploy/helm/nvelox-ingress-controller \
+              --namespace nvelox-ingress --create-namespace \
+              --set controller.image.tag=${{ github.ref_name }}
+            ```
