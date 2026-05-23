@@ -1,0 +1,52 @@
+# Wildcard-host catch-all: serve a default page for any request that
+# doesn't match a more-specific Ingress host.
+#
+# Two ways to express "match anything":
+#   - host omitted entirely on the rule (canonical Ingress spec)
+#   - explicit `*.example.com` if you want to scope to your domain
+#
+# The rule with an empty host matches LAST when nvelox can't find a
+# better Host-specific route. Useful for serving a friendly 404 page
+# or for the "default to landing site" pattern.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catch-all
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: catch-all } }
+  template:
+    metadata: { labels: { app: catch-all } }
+    spec:
+      containers:
+        - name: app
+          image: hashicorp/http-echo:0.2.3
+          args: ["-text=route-not-found", "-status-code=404"]
+          ports: [{ containerPort: 5678 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: catch-all }
+spec:
+  selector: { app: catch-all }
+  ports: [{ port: 80, targetPort: 5678 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: default-backend
+spec:
+  ingressClassName: nvelox
+  rules:
+    # No `host:` — matches any request whose Host header isn't
+    # covered by another Ingress's host rule.
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: catch-all
+                port:
+                  number: 80

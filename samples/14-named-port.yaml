@@ -1,0 +1,65 @@
+# Use a named Service port from the Ingress backend.
+#
+# Ingress's `backend.service.port.name` lets you reference the port
+# by its `name` (as declared on the Service) instead of its number.
+# Useful when the Service's port number is environment-dependent
+# but the port name is stable.
+#
+# The controller watches Services and resolves named ports against
+# `spec.ports[?(name == X)].port` at translate time. Re-renaming
+# the port (e.g., `kubectl patch svc echo -p '{"spec":{"ports":...`)
+# triggers a reconcile via the Services watch and the rendered
+# backend updates automatically.
+#
+# Failure mode: if the referenced port name doesn't exist on the
+# Service (typo, Service not yet created, Service deleted), the
+# route is silently dropped from the rendered config. The eventual
+# Service create / patch event re-fires reconcile and materializes
+# the route.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: api } }
+  template:
+    metadata: { labels: { app: api } }
+    spec:
+      containers:
+        - name: api
+          image: hashicorp/http-echo:0.2.3
+          args: ["-text=named-port-hello"]
+          ports: [{ containerPort: 5678, name: http }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: api }
+spec:
+  selector: { app: api }
+  ports:
+    # Note: `name: http` — the Ingress below references this by name.
+    - name: http
+      port: 80
+      targetPort: 5678
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: { name: api-named }
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: api-named.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  # Reference by `name`, NOT by `number`. The
+                  # controller resolves this against api Service's
+                  # spec.ports[name=http].port → 80.
+                  name: http

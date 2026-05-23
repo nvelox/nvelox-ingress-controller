@@ -1,0 +1,77 @@
+# Inject request and/or response headers on every route this
+# Ingress emits.
+#
+# nvelox.io/request-headers  — added to requests forwarded to the backend
+# nvelox.io/response-headers — added to responses returned to the client
+#
+# Value is a multi-line string with one "Name: Value" pair per line.
+# Bad lines (no colon, empty name) are dropped + logged; the rest of
+# the list still applies.
+#
+# Common uses:
+#   request-headers:
+#     - X-Forwarded-By: nvelox    (identify which ingress fronted the request)
+#     - X-Env: prod               (forward environment context)
+#   response-headers:
+#     - Strict-Transport-Security: max-age=31536000; includeSubDomains
+#     - Content-Security-Policy: default-src 'self'
+#     - X-Frame-Options: DENY
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: echo } }
+  template:
+    metadata: { labels: { app: echo } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:0.2.3
+          args: ["-text=headered-hello"]
+          ports: [{ containerPort: 5678 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: echo }
+spec:
+  selector: { app: echo }
+  ports: [{ port: 5678, targetPort: 5678 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-headered
+  annotations:
+    nvelox.io/request-headers: |
+      X-Forwarded-By: nvelox
+      X-Env: prod
+    nvelox.io/response-headers: |
+      Strict-Transport-Security: max-age=31536000; includeSubDomains
+      X-Frame-Options: DENY
+      X-Content-Type-Options: nosniff
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: headered.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port: { number: 5678 }
+
+# After applying:
+#   curl -i -H 'Host: headered.example.com' http://<NODE_IP>:<NodePort>/
+#     → response includes:
+#       Strict-Transport-Security: max-age=31536000; includeSubDomains
+#       X-Frame-Options: DENY
+#       X-Content-Type-Options: nosniff
+#
+#   (the request-headers are added on the backend-bound request, so
+#    you'd see X-Forwarded-By + X-Env reflected by the backend if it
+#    echoed request headers back)

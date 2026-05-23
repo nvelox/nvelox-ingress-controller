@@ -1,0 +1,115 @@
+# Per-IP request rate limiting via nvelox's ip_rate_limit primitive.
+#
+# Two annotations, both optional, freely combinable:
+#   nvelox.io/rate-limit-per-second  → maps directly to requests_per_second
+#   nvelox.io/rate-limit-per-minute  → ceil(N/60) → requests_per_second, burst=N
+#
+# When BOTH are set, the more restrictive (in per-second-equivalent
+# terms) wins. nvelox enforces per CLIENT IP via token bucket with LRU
+# cleanup — different IPs get independent buckets.
+#
+# Scope caveat: nvelox's ip_rate_limit is per-LISTENER, not per-route.
+# In our render:
+#   - Each HTTPS host → its own listener → annotation isolates per-host.
+#   - HTTP traffic → ONE shared listener (k8s-http) → the most
+#     restrictive annotation across all HTTP Ingresses wins for the
+#     whole listener. Per-route comes when nvelox grows route-level
+#     rate_limit (#203 follow-up).
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: echo } }
+  template:
+    metadata: { labels: { app: echo } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:0.2.3
+          args: ["-text=throttled-hello"]
+          ports: [{ containerPort: 5678 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: echo }
+spec:
+  selector: { app: echo }
+  ports: [{ port: 5678, targetPort: 5678 }]
+---
+# Example 1: 50 requests/second per client IP. Burst defaults to 50
+# (one second's worth) — sustained traffic capped at 50/s.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-fast
+  annotations:
+    nvelox.io/rate-limit-per-second: "50"
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: api-fast.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port: { number: 5678 }
+---
+# Example 2: 60 requests/minute per client IP. nvelox sees this as
+# 1 rps with burst=60, so a client can spend their whole minute's
+# allowance in a single burst, then waits a minute for refill.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-slow
+  annotations:
+    nvelox.io/rate-limit-per-minute: "60"
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: api-slow.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port: { number: 5678 }
+---
+# Example 3: BOTH set. Most restrictive wins. 10/sec + 300/min →
+# 300/min works out to 5/sec, which is stricter than the per-second
+# 10/sec annotation, so the rendered listener gets rps=5, burst=300.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-both
+  annotations:
+    nvelox.io/rate-limit-per-second: "10"
+    nvelox.io/rate-limit-per-minute: "300"
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: api-both.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port: { number: 5678 }
+
+# Verify with a quick hammer:
+#   for i in $(seq 1 100); do
+#     curl -s -o /dev/null -w '%{http_code}\n' \
+#       -H 'Host: api-fast.example.com' http://<NODE_IP>:<NodePort>/
+#   done | sort | uniq -c
+#
+# Expected output: a mix of 200s up to the rate limit, then 429s
+# (Too Many Requests) once the bucket is empty.

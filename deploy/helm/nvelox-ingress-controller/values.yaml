@@ -1,0 +1,132 @@
+# nvelox-ingress — default values.
+#
+# The chart deploys ONE Deployment with two containers in a single pod
+# (shareProcessNamespace=true so the controller can SIGHUP nvelox):
+#   * `nvelox` — the data plane
+#   * `controller` — watches Ingresses, writes config, signals nvelox
+# A Service in front maps real :80/:443 to the nvelox container's
+# in-pod ports (default 8080/8443) so neither container needs to bind
+# privileged ports.
+
+# IngressClass this controller owns. Ingresses with
+# spec.ingressClassName: nvelox are reconciled; others are ignored.
+ingressClass:
+  name: nvelox
+  # Mark this class as the cluster default (added to all Ingresses
+  # without an explicit class). Off by default — opt-in adoption.
+  default: false
+
+# Built-in catch-all 404 route. When enabled, the controller appends a
+# permanent route ("/" → nvelox `static` + `try_files` fallback=404) to
+# the HTTP listener. nvelox requires every listener to have at least
+# one route, so this is what makes the in-pod port bind on a fresh
+# cluster with zero Ingresses — clients get a clean 404 instead of
+# "connection refused". `root` is mounted as an empty emptyDir, so
+# every $uri lookup misses and the fallback fires.
+#
+# Set enabled: false if you'd rather the port stay closed until you
+# apply at least one real Ingress (smaller surface, less surprising
+# behavior for "is anything serving on this address" probes).
+defaultBackend:
+  enabled: true
+  root: /etc/nvelox/default-www
+
+# Ingress status publishing. When enabled, the controller writes the
+# external address of the chart's own Service back to every owned
+# Ingress's status.loadBalancer.ingress[] so `kubectl get ingress`
+# shows the real address users hit. Discovery rules:
+#   - service.type=LoadBalancer → uses the LB's IP/hostname
+#   - service.type=NodePort     → uses Node InternalIPs
+#   - service.type=ClusterIP    → no status updates (no external addr)
+# Toggle off if status is managed elsewhere (e.g., external-dns).
+publishStatus:
+  enabled: true
+
+replicas: 1
+
+# Set true and bump replicas to 2+ for HA. Lease coordination via
+# Coordination API in the install namespace.
+leaderElection:
+  enabled: false
+
+controller:
+  image:
+    repository: ghcr.io/nvelox/nvelox-ingress-controller
+    tag: "v0.1.0"  # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# nvelox sidecar — the data plane the controller hot-reloads.
+nvelox:
+  image:
+    repository: ghcr.io/nvelox/nvelox
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+  # In-pod listener ports. The fronting Service maps :80 → httpPort
+  # and :443 → httpsPort so neither container needs CAP_NET_BIND_SERVICE.
+  httpPort: 8080
+  httpsPort: 8443
+  # Base config the controller's rendered fragment is `include`-d into.
+  # Operators can override to enable metrics, tracing, admin auth, etc.
+  config: |
+    version: "2"
+    server:
+      pid_file: /var/run/nvelox/nvelox.pid
+    logging:
+      level: info
+    metrics:
+      enabled: true
+      bind: ":9090"
+      path: /metrics
+    include: /etc/nvelox/conf.d/*.yaml
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+# Service that fronts the nvelox container. LoadBalancer is the
+# typical production choice; NodePort for kind/minikube; ClusterIP +
+# external ingress (Istio/MetalLB) also work.
+service:
+  type: NodePort
+  annotations: {}
+  # When type=NodePort and you need stable port assignments.
+  httpNodePort: ""
+  httpsNodePort: ""
+
+# Pod-level controls. shareProcessNamespace is REQUIRED — the
+# controller signals nvelox via SIGHUP across containers.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# Used as the controller's --leader-elect-id and as ConfigMap /
+# Service / Deployment name suffix. Override if you run multiple
+# instances per namespace.
+nameOverride: ""
+fullnameOverride: ""
+
+# Add prometheus.io/scrape annotations on the pod so a standard
+# Prometheus install scrapes the controller's :8082/metrics and
+# nvelox's :9090/metrics.
+metrics:
+  podAnnotations: true
+
+# Optional: NetworkPolicy egress/ingress lock-down. Off by default
+# (clusters that need it tend to manage policies centrally).
+networkPolicy:
+  enabled: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

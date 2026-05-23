@@ -1,0 +1,38 @@
+{{/*
+External-facing Service mapping real 80/443 onto the nvelox container's
+in-pod ports (default 8080/8443 so neither container needs
+CAP_NET_BIND_SERVICE).
+
+Service type is operator's choice:
+  - LoadBalancer: typical production (cloud LB, MetalLB)
+  - NodePort:     bare-metal / kind / minikube
+  - ClusterIP:    when fronted by an external ingress / Istio / etc.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nvelox-ingress-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvelox-ingress-controller.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "nvelox-ingress-controller.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.httpNodePort }}
+      nodePort: {{ .Values.service.httpNodePort }}
+      {{- end }}
+    - name: https
+      port: 443
+      targetPort: https
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.httpsNodePort }}
+      nodePort: {{ .Values.service.httpsNodePort }}
+      {{- end }}

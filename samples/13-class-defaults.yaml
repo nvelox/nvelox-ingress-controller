@@ -1,0 +1,113 @@
+# Cluster-wide defaults via IngressClass.spec.parameters.
+#
+# Pattern: a ConfigMap holds default values for the same nvelox.io/*
+# annotation keys; the controller reads it via IngressClass.spec.
+# parameters and merges defaults UNDER per-Ingress annotations. Per
+# field merge semantics:
+#   - Scalars (rate-limit-per-second, sticky-cookie, strip-prefix)
+#       per-Ingress non-zero/non-empty wins; else default applies.
+#   - CIDR lists (allow-cidrs, deny-cidrs)
+#       UNION of default + per-Ingress, deduped.
+#   - Header maps (request-headers, response-headers)
+#       Per-key override: per-Ingress wins for same key, else default.
+#   - RedirectHTTPS bool — NOT supported in defaults yet (parser
+#     can't distinguish "annotation absent" from "annotation=false";
+#     documented limitation; lift when we track presence separately).
+#
+# Keys in the ConfigMap can use either form:
+#   nvelox.io/rate-limit-per-second: "50"     (annotation-style, copy-paste from an Ingress)
+#   rate-limit-per-second: "50"               (bare, easier to type)
+# Both produce the same result.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvelox-defaults
+  namespace: nvelox-ingress
+data:
+  # Cluster-wide: every Ingress in this class gets a 100 rps default
+  # per-IP rate limit unless the Ingress sets its own annotation.
+  rate-limit-per-second: "100"
+  # Block a known-bad CIDR globally. Per-Ingress deny-cidrs UNION
+  # with this list, so individual Ingresses can ADD more denies
+  # without losing the cluster-wide ones.
+  deny-cidrs: "192.168.99.0/24"
+  # Default security-flavor response headers. Per-Ingress can
+  # OVERRIDE same-named keys (e.g., set a stricter CSP) or ADD
+  # additional ones (different keys).
+  response-headers: |
+    Strict-Transport-Security: max-age=31536000; includeSubDomains
+    X-Content-Type-Options: nosniff
+    X-Frame-Options: DENY
+---
+# Point the IngressClass at the ConfigMap above. The controller's
+# load-class-defaults helper follows .spec.parameters when its kind
+# is ConfigMap. Only ConfigMap is supported today; custom CRD
+# parameters are a follow-up (see roadmap.md).
+#
+# NOTE: This block replaces the IngressClass already installed by
+# the Helm chart. To use this pattern, EITHER:
+#   - apply this manifest after the chart and accept the override, OR
+#   - set ingressClass.default=false in chart values + manage the
+#     IngressClass yourself with the parameters block included.
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: nvelox
+spec:
+  controller: nvelox.io/ingress
+  parameters:
+    # apiGroup OMITTED entirely (not "") — the field is *string;
+    # the API server's RFC-1123 validator rejects "" but accepts
+    # nil to mean "core group". This is a real gotcha; only
+    # custom CRD targets specify apiGroup.
+    kind: ConfigMap
+    name: nvelox-defaults
+    namespace: nvelox-ingress
+    scope: Namespace        # not cluster-scoped
+---
+# Example Ingress that uses the defaults — note: NO rate-limit
+# annotation, but the class default (100 rps) applies.
+# The Ingress ADDS a per-route allow-cidrs (UNIONed with the
+# class-default deny-cidrs at runtime).
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: echo }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: echo } }
+  template:
+    metadata: { labels: { app: echo } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:0.2.3
+          args: ["-text=defaulted-hello"]
+          ports: [{ containerPort: 5678 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: echo }
+spec:
+  selector: { app: echo }
+  ports: [{ port: 5678, targetPort: 5678 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-with-defaults
+  annotations:
+    # Per-Ingress allow-cidrs UNIONs with class deny-cidrs.
+    nvelox.io/allow-cidrs: "10.0.0.0/8"
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: defaulted.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port: { number: 5678 }

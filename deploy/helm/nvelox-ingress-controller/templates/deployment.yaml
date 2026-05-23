@@ -1,0 +1,147 @@
+{{/*
+Two containers, one pod:
+  - controller: watches Ingress/Secret, writes /etc/nvelox/conf.d/k8s.yaml
+                and SIGHUPs the nvelox PID. Reads Secret data → /etc/nvelox/tls.
+  - nvelox:     reads /etc/nvelox/nvelox.yaml (mounted ConfigMap) + everything
+                under /etc/nvelox/conf.d/, binds 8080/8443 in-pod.
+
+shareProcessNamespace=true is REQUIRED — the controller's SIGHUP-by-PID
+path crosses the container boundary that way. Without it the controller
+can't see nvelox's PID and reloads no-op.
+
+Four shared volumes:
+  - conf.d      (emptyDir): controller writes, nvelox reads. Reload target.
+  - tls         (emptyDir): controller writes secret-derived cert/key files,
+                            nvelox reads them when terminating TLS.
+  - run         (emptyDir): nvelox writes pid_file here; controller reads it
+                            to locate the SIGHUP target (preferred over /proc scan).
+  - default-www (emptyDir): empty directory used as the static-file root for
+                            the catch-all 404 route. Stays empty forever — every
+                            $uri lookup misses, fallback returns 404. Mounted
+                            into nvelox ONLY (controller never touches it).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nvelox-ingress-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvelox-ingress-controller.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "nvelox-ingress-controller.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nvelox-ingress-controller.selectorLabels" . | nindent 8 }}
+      {{- if .Values.metrics.podAnnotations }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "nvelox-ingress-controller.serviceAccountName" . }}
+      shareProcessNamespace: true
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: controller
+          image: {{ include "nvelox-ingress-controller.controllerImage" . }}
+          imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+          args:
+            - --ingress-class={{ .Values.ingressClass.name }}
+            - --config-path=/etc/nvelox/conf.d/k8s.yaml
+            - --pid-file=/var/run/nvelox/nvelox.pid
+            - --proc-name=nvelox
+            - --tls-cert-dir=/etc/nvelox/tls
+            - --http-port={{ .Values.nvelox.httpPort }}
+            - --https-port={{ .Values.nvelox.httpsPort }}
+            {{- if .Values.defaultBackend.enabled }}
+            - --default-backend-root={{ .Values.defaultBackend.root }}
+            {{- else }}
+            - --default-backend-root=
+            {{- end }}
+            {{- if .Values.publishStatus.enabled }}
+            - --publish-service={{ .Release.Namespace }}/{{ include "nvelox-ingress-controller.fullname" . }}
+            {{- end }}
+            {{- if .Values.leaderElection.enabled }}
+            - --leader-elect=true
+            - --leader-elect-id={{ include "nvelox-ingress-controller.fullname" . }}
+            {{- end }}
+          ports:
+            - { name: ctrl-metrics, containerPort: 8082 }
+            - { name: ctrl-probe,   containerPort: 8083 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: ctrl-probe }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /readyz, port: ctrl-probe }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: confd, mountPath: /etc/nvelox/conf.d }
+            - { name: tls,   mountPath: /etc/nvelox/tls }
+            - { name: run,   mountPath: /var/run/nvelox }
+        - name: nvelox
+          image: {{ include "nvelox-ingress-controller.nveloxImage" . }}
+          imagePullPolicy: {{ .Values.nvelox.image.pullPolicy }}
+          args:
+            - --config=/etc/nvelox/nvelox.yaml
+          ports:
+            - { name: http,    containerPort: {{ .Values.nvelox.httpPort }} }
+            - { name: https,   containerPort: {{ .Values.nvelox.httpsPort }} }
+            - { name: metrics, containerPort: 9090 }
+          resources:
+            {{- toYaml .Values.nvelox.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # nvelox writes pid_file to /var/run/nvelox (emptyDir) and
+            # accepts SIGHUP — no root filesystem writes needed.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: base, mountPath: /etc/nvelox/nvelox.yaml, subPath: nvelox.yaml, readOnly: true }
+            - { name: confd, mountPath: /etc/nvelox/conf.d }
+            - { name: tls,   mountPath: /etc/nvelox/tls, readOnly: true }
+            - { name: run,   mountPath: /var/run/nvelox }
+            {{- if .Values.defaultBackend.enabled }}
+            - { name: default-www, mountPath: {{ .Values.defaultBackend.root }}, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: base
+          configMap:
+            name: {{ include "nvelox-ingress-controller.fullname" . }}-config
+        - name: confd
+          emptyDir: {}
+        - name: tls
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+        {{- if .Values.defaultBackend.enabled }}
+        - name: default-www
+          emptyDir: {}
+        {{- end }}

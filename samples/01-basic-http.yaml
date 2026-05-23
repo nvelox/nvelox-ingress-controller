@@ -1,0 +1,56 @@
+# Single-host HTTP Ingress — the smallest useful example.
+#
+# What it does:
+#   - Deploys an `echo` workload that returns "hello-from-nvelox"
+#   - Exposes it cluster-internally via a Service on port 5678
+#   - Tells the nvelox controller to route Host: echo.example.com → that Service
+#
+# After applying, hit it through the nvelox-ingress Service:
+#   curl -H 'Host: echo.example.com' http://<EXTERNAL_IP>/
+#
+# If you're on kind/minikube without a real LoadBalancer, port-forward
+# the nvelox-ingress service:
+#   kubectl -n nvelox-ingress port-forward svc/nvelox-ingress 8080:80
+#   curl -H 'Host: echo.example.com' http://localhost:8080/
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: echo } }
+  template:
+    metadata: { labels: { app: echo } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:0.2.3
+          args: ["-text=hello-from-nvelox"]
+          ports: [{ containerPort: 5678 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+spec:
+  selector: { app: echo }
+  ports: [{ port: 5678, targetPort: 5678 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: echo.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port:
+                  number: 5678

@@ -1,0 +1,85 @@
+# Cookie-based session affinity for a backend.
+#
+# nvelox.io/sticky-cookie: <name> tells nvelox to set/read a cookie
+# named <name> and pin subsequent requests from the same client back
+# to the same backend server. Maps to nvelox's backend-level
+# sticky_session{type=cookie, cookie_name=<name>, ttl=1h}.
+#
+# CAVEAT (important): full per-pod affinity requires the controller
+# to emit one backend.servers entry per pod IP. Today the controller
+# emits a single in-cluster DNS name per Service (<svc>.<ns>.svc.
+# cluster.local), so kube-proxy picks the pod and nvelox's
+# affinity cookie only ever sees one "server" — the Service VIP.
+# Result: cookie is set + read correctly, but the actual pinning
+# happens at kube-proxy's layer (its own session-affinity setting,
+# if configured). Full effect requires the EndpointSlices follow-up
+# (roadmap #210). The annotation still renders correctly and is
+# the right call to make now; just don't expect "pin to pod-A"
+# behavior until #210 ships.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+spec:
+  replicas: 3   # multiple pods so stickiness is observable
+  selector: { matchLabels: { app: echo } }
+  template:
+    metadata: { labels: { app: echo } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:0.2.3
+          # `-text=hello-${HOSTNAME}` would echo pod name back — handy
+          # for confirming which pod served the request when testing
+          # stickiness. Plain text used here so the sample stays
+          # comparable to the others.
+          args: ["-text=session-hello"]
+          ports: [{ containerPort: 5678 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: echo }
+spec:
+  selector: { app: echo }
+  ports: [{ port: 5678, targetPort: 5678 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-sticky
+  annotations:
+    # Value = the cookie name nvelox sets + reads. Use whatever is
+    # convenient for your app; common choices are "NVELOX_SRV"
+    # (default in nvelox's own example), "SESSIONID", "JSESSIONID".
+    nvelox.io/sticky-cookie: "NVELOX_SRV"
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: sticky.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port:
+                  number: 5678
+
+# After applying:
+#   curl -i -H 'Host: sticky.example.com' http://<NODE_IP>:<NodePort>/
+#
+# What you'll see TODAY (pre-#210):
+#   The rendered nvelox config has the sticky_session block, but the
+#   response has NO Set-Cookie header. That's not a bug: with a single
+#   backend.server entry (kube-proxy serves the Service VIP, so nvelox
+#   sees one address), there's no load-balancing decision to remember,
+#   so nvelox skips emitting the cookie. Verify the config landed
+#   correctly with:
+#     kubectl -n nvelox-ingress exec deploy/nvelox-ingress-controller \
+#       -c controller -- cat /etc/nvelox/conf.d/k8s.yaml | grep -A 3 sticky_session
+#
+# What you'll see AFTER #210 (EndpointSlices → one server per pod):
+#   First request → Set-Cookie: NVELOX_SRV=<server-id>; Path=/; Max-Age=3600
+#   Subsequent requests carrying that cookie → pinned to the same pod.

@@ -1,0 +1,23 @@
+{{/*
+IngressClass registers our controller as a possible target for
+Ingress.spec.ingressClassName. The controller field is what the
+admission/validation chain matches against — keep it stable across
+chart versions so existing Ingresses keep routing here.
+
+When ingressClass.default=true, the ingressclass.kubernetes.io/is-default-class
+annotation makes new Ingresses without an explicit class adopt us.
+There can be at most one default per cluster — admission will reject
+a second.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ .Values.ingressClass.name }}
+  labels:
+    {{- include "nvelox-ingress-controller.labels" . | nindent 4 }}
+  {{- if .Values.ingressClass.default }}
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+  {{- end }}
+spec:
+  controller: nvelox.io/ingress

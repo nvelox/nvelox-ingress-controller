@@ -1,0 +1,16 @@
+{{/*
+Base nvelox config — mounted read-only at /etc/nvelox/nvelox.yaml.
+Operators override via values.nvelox.config; the only hard requirement
+is that it `include`s /etc/nvelox/conf.d/*.yaml (where the controller
+writes the rendered route fragment).
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nvelox-ingress-controller.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvelox-ingress-controller.labels" . | nindent 4 }}
+data:
+  nvelox.yaml: |
+{{ .Values.nvelox.config | indent 4 }}

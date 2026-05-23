@@ -1,0 +1,123 @@
+# Per-listener CIDR allow / deny filters via nvelox's
+# ip_allowlist + ip_denylist primitives.
+#
+# Two annotations, both optional, both comma-separated:
+#   nvelox.io/allow-cidrs: "10.0.0.0/8,192.168.0.0/16"
+#       When set, ONLY listed CIDRs reach the listener. Everything
+#       else is denied at L3. Use this for "internal-only" endpoints.
+#   nvelox.io/deny-cidrs:  "1.2.3.0/24,5.6.7.0/24"
+#       Block specific CIDRs from reaching the listener. Useful for
+#       known-bad source ranges or ad-hoc IP bans.
+#
+# Both can be set together: allowlist filters first ("are you in the
+# allowlist?"), then denylist further restricts ("are you on the
+# blocklist?"). Bad CIDRs in the annotation are dropped + logged
+# (the rest of the list still applies).
+#
+# Scope (important): nvelox's ip_*list fields are per-listener, not
+# per-route. In our render:
+#   - Each HTTPS host gets its own listener — annotations isolate
+#     cleanly per host. Prefer HTTPS for "this host has a strict
+#     allowlist" routes.
+#   - The HTTP catch-all listener is shared across all HTTP Ingresses.
+#     deny-cidrs across multiple HTTP Ingresses UNION (safe — every
+#     contributor's denies apply). allow-cidrs also UNION, but since
+#     "any allowlist set = deny everything else", an allow-cidrs on
+#     one HTTP Ingress will restrict NEIGHBOURING HTTP Ingresses too.
+#     If that matters, route the strict-allowlist host through HTTPS
+#     for its own listener.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: echo } }
+  template:
+    metadata: { labels: { app: echo } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:0.2.3
+          args: ["-text=acl-hello"]
+          ports: [{ containerPort: 5678 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: echo }
+spec:
+  selector: { app: echo }
+  ports: [{ port: 5678, targetPort: 5678 }]
+---
+# Example 1: internal-only host. Only RFC1918 sources reach it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-internal
+  annotations:
+    nvelox.io/allow-cidrs: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: internal.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port: { number: 5678 }
+---
+# Example 2: public host with a small blocklist.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-public
+  annotations:
+    nvelox.io/deny-cidrs: "1.2.3.0/24,5.6.7.0/24"
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: public.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port: { number: 5678 }
+---
+# Example 3: allow + deny stacked. Only RFC1918 sources can reach
+# this host, AND a specific subnet within RFC1918 is additionally
+# blocked.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-internal-guarded
+  annotations:
+    nvelox.io/allow-cidrs: "10.0.0.0/8"
+    nvelox.io/deny-cidrs:  "10.99.0.0/16"
+spec:
+  ingressClassName: nvelox
+  rules:
+    - host: guarded.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo
+                port: { number: 5678 }
+
+# After applying, verify with:
+#   curl -i -H 'Host: internal.example.com' http://<NODE_IP>:<NodePort>/
+#     → from RFC1918 source: 200 acl-hello
+#     → from public source:  403 (or connection-level reject; nvelox-specific)
+#
+#   curl -i -H 'Host: public.example.com' http://<NODE_IP>:<NodePort>/
+#     → from any source except 1.2.3.0/24 or 5.6.7.0/24: 200 acl-hello
+#     → from those denied CIDRs: 403
