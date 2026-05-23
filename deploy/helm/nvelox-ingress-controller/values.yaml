@@ -52,7 +52,7 @@ leaderElection:
 controller:
   image:
     repository: ghcr.io/nvelox/nvelox-ingress-controller
-    tag: "v0.1.0"  # defaults to .Chart.AppVersion
+    tag: 0.1.0  # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -66,7 +66,7 @@ controller:
 nvelox:
   image:
     repository: ghcr.io/nvelox/nvelox
-    tag: v0.1.0
+    tag: v1.0.1
     pullPolicy: IfNotPresent
   # In-pod listener ports. The fronting Service maps :80 → httpPort
   # and :443 → httpsPort so neither container needs CAP_NET_BIND_SERVICE.

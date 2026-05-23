@@ -22,6 +22,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	networkingv1 "k8s.io/api/networking/v1"
 )
@@ -347,7 +348,32 @@ type parseErr string
 
 func (e parseErr) Error() string { return string(e) }
 
+// badValueDedupe records (ingressID, annotation key, raw value) triples
+// we've already warned about, so reconcile churn (an Ingress can be
+// re-parsed dozens of times per minute when EndpointSlices flip)
+// doesn't multiply each bad-value into thousands of identical log
+// lines. When the operator fixes the typo, the triple changes and
+// the next bad value (if any) logs once.
+//
+// Memory is bounded by ingress-count × annotation-keys × distinct-
+// bad-values; realistic ceiling is small (hundreds). No eviction —
+// the cost is negligible vs the centralized-logging spam this prevents.
+var (
+	badValueDedupeMu sync.Mutex
+	badValueDedupe   = map[string]struct{}{}
+)
+
 func logBadValue(ingressID, key, value string, err error) {
+	dedupeKey := ingressID + "|" + key + "|" + value
+	badValueDedupeMu.Lock()
+	_, seen := badValueDedupe[dedupeKey]
+	if !seen {
+		badValueDedupe[dedupeKey] = struct{}{}
+	}
+	badValueDedupeMu.Unlock()
+	if seen {
+		return
+	}
 	slog.Warn("ignoring invalid annotation value",
 		"ingress", ingressID,
 		"annotation", key,

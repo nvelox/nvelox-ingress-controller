@@ -178,6 +178,45 @@ func TestParse_DenyCIDRs(t *testing.T) {
 	}
 }
 
+func TestLogBadValue_Dedupe(t *testing.T) {
+	// Reconcile churn re-parses the same Ingress many times per
+	// minute on a healthy cluster (EndpointSlice flips, Service
+	// updates, etc.). Each invalid annotation value must log
+	// ONCE — not once per reconcile — or centralized logging
+	// fills up fast.
+	//
+	// This test snapshots the package-level dedupe map's size
+	// across repeated calls with the same (ingress, key, value)
+	// triple. Size must grow by exactly 1.
+
+	// Capture starting size in case other tests already added entries.
+	badValueDedupeMu.Lock()
+	startSize := len(badValueDedupe)
+	badValueDedupeMu.Unlock()
+
+	dummy := parseErr("test invalid")
+	for i := 0; i < 50; i++ {
+		logBadValue("test-ns/test-name", "nvelox.io/test", "bad-value", dummy)
+	}
+
+	badValueDedupeMu.Lock()
+	endSize := len(badValueDedupe)
+	badValueDedupeMu.Unlock()
+
+	if endSize-startSize != 1 {
+		t.Errorf("expected dedupe map to grow by exactly 1 for 50 identical calls; grew by %d", endSize-startSize)
+	}
+
+	// Different value for same (ingress, key) → counts as new entry.
+	logBadValue("test-ns/test-name", "nvelox.io/test", "different-bad-value", dummy)
+	badValueDedupeMu.Lock()
+	endSize2 := len(badValueDedupe)
+	badValueDedupeMu.Unlock()
+	if endSize2-endSize != 1 {
+		t.Errorf("expected new value to add 1 entry; grew by %d", endSize2-endSize)
+	}
+}
+
 func TestParse_StripPrefix(t *testing.T) {
 	cases := []struct {
 		val  string
