@@ -83,10 +83,10 @@ func TestParse_RateLimitPerSecond(t *testing.T) {
 	}{
 		{"100", 100},
 		{"1", 1},
-		{"0", 0},     // non-positive → off
-		{"-5", 0},    // negative → off
-		{"abc", 0},   // garbage → off
-		{"", 0},      // empty → off (treated like absent)
+		{"0", 0},   // non-positive → off
+		{"-5", 0},  // negative → off
+		{"abc", 0}, // garbage → off
+		{"", 0},    // empty → off (treated like absent)
 	}
 	for _, c := range cases {
 		t.Run(c.val, func(t *testing.T) {
@@ -126,9 +126,9 @@ func TestParse_StickyCookie(t *testing.T) {
 		want string
 	}{
 		{"NVELOX_SRV", "NVELOX_SRV"},
-		{"  trimmed  ", "trimmed"},        // whitespace trimmed
-		{"", ""},                          // empty → off
-		{"   ", ""},                       // whitespace-only → off
+		{"  trimmed  ", "trimmed"}, // whitespace trimmed
+		{"", ""},                   // empty → off
+		{"   ", ""},                // whitespace-only → off
 	}
 	for _, c := range cases {
 		t.Run(c.val, func(t *testing.T) {
@@ -154,11 +154,11 @@ func TestParse_AllowCIDRs(t *testing.T) {
 	}{
 		{"10.0.0.0/8", []string{"10.0.0.0/8"}},
 		{"10.0.0.0/8,192.168.0.0/16", []string{"10.0.0.0/8", "192.168.0.0/16"}},
-		{"  10.0.0.0/8 , 192.168.0.0/16  ", []string{"10.0.0.0/8", "192.168.0.0/16"}}, // whitespace
+		{"  10.0.0.0/8 , 192.168.0.0/16  ", []string{"10.0.0.0/8", "192.168.0.0/16"}},        // whitespace
 		{"10.0.0.0/8,invalid-cidr,192.168.0.0/16", []string{"10.0.0.0/8", "192.168.0.0/16"}}, // bad entry dropped
-		{",,,", nil},   // all empty
-		{"", nil},      // empty value
-		{"junk", nil},  // entire value invalid
+		{",,,", nil},  // all empty
+		{"", nil},     // empty value
+		{"junk", nil}, // entire value invalid
 	}
 	for _, c := range cases {
 		t.Run(c.val, func(t *testing.T) {
@@ -184,10 +184,10 @@ func TestParse_StripPrefix(t *testing.T) {
 		want string
 	}{
 		{"/api", "/api"},
-		{"  /api  ", "/api"},  // trimmed
+		{"  /api  ", "/api"}, // trimmed
 		{"/api/v1", "/api/v1"},
-		{"", ""},               // empty → off
-		{"api-no-slash", ""},   // missing leading slash → rejected
+		{"", ""},             // empty → off
+		{"api-no-slash", ""}, // missing leading slash → rejected
 	}
 	for _, c := range cases {
 		t.Run(c.val, func(t *testing.T) {

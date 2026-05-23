@@ -8,7 +8,7 @@
 //     ing.Annotations["nvelox.io/redirect-https"] sprinkled
 //     everywhere).
 //   - Adding a new annotation = one struct field + one parse line
-//     + one doc entry. Optimized for the next ten annotations,
+//   - one doc entry. Optimized for the next ten annotations,
 //     not the first.
 //   - Invalid values are logged + dropped + Event-emitted (TODO).
 //     Never block reconcile on a parse error — the rest of the
@@ -34,15 +34,15 @@ const Prefix = "nvelox.io/"
 // Named keys — exported so tests + samples can reference them by
 // name without re-typing the prefix.
 const (
-	KeyRedirectHTTPS       = Prefix + "redirect-https"
-	KeyRateLimitPerSecond  = Prefix + "rate-limit-per-second"
-	KeyRateLimitPerMinute  = Prefix + "rate-limit-per-minute"
-	KeyStickyCookie        = Prefix + "sticky-cookie"
-	KeyAllowCIDRs          = Prefix + "allow-cidrs"
-	KeyDenyCIDRs           = Prefix + "deny-cidrs"
-	KeyStripPrefix         = Prefix + "strip-prefix"
-	KeyRequestHeaders      = Prefix + "request-headers"
-	KeyResponseHeaders     = Prefix + "response-headers"
+	KeyRedirectHTTPS      = Prefix + "redirect-https"
+	KeyRateLimitPerSecond = Prefix + "rate-limit-per-second"
+	KeyRateLimitPerMinute = Prefix + "rate-limit-per-minute"
+	KeyStickyCookie       = Prefix + "sticky-cookie"
+	KeyAllowCIDRs         = Prefix + "allow-cidrs"
+	KeyDenyCIDRs          = Prefix + "deny-cidrs"
+	KeyStripPrefix        = Prefix + "strip-prefix"
+	KeyRequestHeaders     = Prefix + "request-headers"
+	KeyResponseHeaders    = Prefix + "response-headers"
 )
 
 // Spec is the fully-parsed annotation bundle for one Ingress. Every
@@ -222,18 +222,18 @@ var errHeaderBadLine = parseErr("expected 'Name: Value' per line")
 //
 // Semantics per field (chosen to surprise least):
 //   - RedirectHTTPS  — currently ignored from defaults. Our parser
-//                      can't distinguish "annotation absent" from
-//                      "annotation=false", so a default of true
-//                      can't be safely overridden by an Ingress
-//                      that wants false. Documented limitation;
-//                      lift once we track presence separately.
+//     can't distinguish "annotation absent" from
+//     "annotation=false", so a default of true
+//     can't be safely overridden by an Ingress
+//     that wants false. Documented limitation;
+//     lift once we track presence separately.
 //   - RateLimitPer*  — non-zero per-Ingress wins; else default.
 //   - StickyCookie   — non-empty per-Ingress wins; else default.
 //   - StripPrefix    — non-empty per-Ingress wins; else default.
 //   - AllowCIDRs/DenyCIDRs — UNION (defaults + per-Ingress, deduped
-//                      via the translator's existing collection map).
+//     via the translator's existing collection map).
 //   - Request/ResponseHeaders — defaults first, per-Ingress overrides
-//                      same-named keys. Different keys merge.
+//     same-named keys. Different keys merge.
 func Merge(defaults, override Spec) Spec {
 	out := override
 

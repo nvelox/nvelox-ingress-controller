@@ -104,16 +104,16 @@ type nveloxConfig struct {
 }
 
 type listener struct {
-	Name          string             `yaml:"name" json:"name"`
-	Bind          string             `yaml:"bind" json:"bind"`
-	Protocol      string             `yaml:"protocol" json:"protocol"`
-	ServerNames   []string           `yaml:"server_names,omitempty" json:"server_names,omitempty"`
-	DefaultServer bool               `yaml:"default_server,omitempty" json:"default_server,omitempty"`
-	TLS           *tlsBlock          `yaml:"tls,omitempty" json:"tls,omitempty"`
-	IPRateLimit   *ipRateLimitBlock  `yaml:"ip_rate_limit,omitempty" json:"ip_rate_limit,omitempty"`
-	IPAllowlist   []string           `yaml:"ip_allowlist,omitempty" json:"ip_allowlist,omitempty"`
-	IPDenylist    []string           `yaml:"ip_denylist,omitempty" json:"ip_denylist,omitempty"`
-	Routes        []route            `yaml:"routes,omitempty" json:"routes,omitempty"`
+	Name          string            `yaml:"name" json:"name"`
+	Bind          string            `yaml:"bind" json:"bind"`
+	Protocol      string            `yaml:"protocol" json:"protocol"`
+	ServerNames   []string          `yaml:"server_names,omitempty" json:"server_names,omitempty"`
+	DefaultServer bool              `yaml:"default_server,omitempty" json:"default_server,omitempty"`
+	TLS           *tlsBlock         `yaml:"tls,omitempty" json:"tls,omitempty"`
+	IPRateLimit   *ipRateLimitBlock `yaml:"ip_rate_limit,omitempty" json:"ip_rate_limit,omitempty"`
+	IPAllowlist   []string          `yaml:"ip_allowlist,omitempty" json:"ip_allowlist,omitempty"`
+	IPDenylist    []string          `yaml:"ip_denylist,omitempty" json:"ip_denylist,omitempty"`
+	Routes        []route           `yaml:"routes,omitempty" json:"routes,omitempty"`
 }
 
 // ipRateLimitBlock models nvelox's listener-level per-client-IP
@@ -136,13 +136,13 @@ type tlsBlock struct {
 }
 
 type route struct {
-	Match    matchBlock      `yaml:"match" json:"match"`
-	Backend  string          `yaml:"backend,omitempty" json:"backend,omitempty"`
-	Static   *staticBlock    `yaml:"static,omitempty" json:"static,omitempty"`
-	TryFiles *tryFilesBlock  `yaml:"try_files,omitempty" json:"try_files,omitempty"`
-	Redirect *redirectBlock  `yaml:"redirect,omitempty" json:"redirect,omitempty"`
-	Rewrite  *rewriteBlock   `yaml:"rewrite,omitempty" json:"rewrite,omitempty"`
-	Headers  *headersBlock   `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Match    matchBlock     `yaml:"match" json:"match"`
+	Backend  string         `yaml:"backend,omitempty" json:"backend,omitempty"`
+	Static   *staticBlock   `yaml:"static,omitempty" json:"static,omitempty"`
+	TryFiles *tryFilesBlock `yaml:"try_files,omitempty" json:"try_files,omitempty"`
+	Redirect *redirectBlock `yaml:"redirect,omitempty" json:"redirect,omitempty"`
+	Rewrite  *rewriteBlock  `yaml:"rewrite,omitempty" json:"rewrite,omitempty"`
+	Headers  *headersBlock  `yaml:"headers,omitempty" json:"headers,omitempty"`
 }
 
 // redirectBlock matches nvelox's `redirect:` route action shape (see
@@ -174,7 +174,7 @@ type matchBlock struct {
 	PathPrefix string `yaml:"path_prefix,omitempty" json:"path_prefix,omitempty"`
 	// PathRegex is mutually exclusive with PathPrefix — only set
 	// when the route needs capture groups (e.g., strip-prefix).
-	PathRegex  string `yaml:"path_regex,omitempty" json:"path_regex,omitempty"`
+	PathRegex string `yaml:"path_regex,omitempty" json:"path_regex,omitempty"`
 }
 
 // staticBlock + tryFilesBlock model nvelox's static-file route shape.
@@ -195,9 +195,9 @@ type tryFilesBlock struct {
 // tripped nvelox's pre-flight validator: "cannot unmarshal !!map into
 // string". Don't reintroduce the struct form.
 type backend struct {
-	Name          string         `yaml:"name" json:"name"`
-	Servers       []string       `yaml:"servers" json:"servers"`
-	StickySession *stickyBlock   `yaml:"sticky_session,omitempty" json:"sticky_session,omitempty"`
+	Name          string       `yaml:"name" json:"name"`
+	Servers       []string     `yaml:"servers" json:"servers"`
+	StickySession *stickyBlock `yaml:"sticky_session,omitempty" json:"sticky_session,omitempty"`
 }
 
 // stickyBlock models nvelox's backend-level session affinity (see
