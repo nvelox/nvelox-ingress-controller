@@ -21,6 +21,16 @@ metadata:
   {{- end }}
 spec:
   type: {{ .Values.service.type }}
+  {{- if and .Values.service.externalTrafficPolicy (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) }}
+  # Local preserves the external client's source IP (no kube-proxy SNAT),
+  # so nvelox sees the real client in RemoteAddr and writes it into
+  # X-Forwarded-For. With Cluster (the k8s default) the client IP is
+  # SNAT'd to the node IP before nvelox accepts the connection and is
+  # unrecoverable. Caveat: with Local, only nodes running an nvelox pod
+  # answer on the NodePort/LB target — route external traffic accordingly
+  # (or run the controller as a DaemonSet).
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
   selector:
     {{- include "nvelox-ingress-controller.selectorLabels" . | nindent 4 }}
   ports:

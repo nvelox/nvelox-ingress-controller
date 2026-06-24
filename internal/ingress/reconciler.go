@@ -50,6 +50,13 @@ type Reconciler struct {
 	// every owned Ingress's status.loadBalancer.ingress[]. Form:
 	// "<namespace>/<name>". Empty disables status updates.
 	PublishService string
+
+	// TrustedProxies is emitted as `trusted_proxies` on every generated
+	// nvelox listener (see translator.Inputs.TrustedProxies). Set when
+	// this nvelox runs behind an upstream proxy so it appends to, rather
+	// than overwrites, the inbound X-Forwarded-For. Empty = no upstream
+	// trusted (XFF replaced with peer — the safe default for a true edge).
+	TrustedProxies []string
 }
 
 // Reconcile is fired on any Ingress / Secret event in the cluster. We
@@ -124,6 +131,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		ServicePorts:        servicePorts,
 		EndpointAddresses:   endpointAddrs,
 		AnnotationOverrides: overrides,
+		TrustedProxies:      r.TrustedProxies,
 	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("translate: %w", err)

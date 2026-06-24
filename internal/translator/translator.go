@@ -93,6 +93,17 @@ type Inputs struct {
 	// annotations before handing off to the translator — keeps the
 	// translator unaware of class-level config.
 	AnnotationOverrides map[string]annotations.Spec
+
+	// TrustedProxies, when set, is emitted as `trusted_proxies` on EVERY
+	// generated listener. Use it when this nvelox runs behind another
+	// proxy (an edge GW nvelox, a cloud LB) so it APPENDS to the inbound
+	// X-Forwarded-For / X-Real-IP instead of overwriting it — that's how
+	// the real client IP captured at the edge survives this hop. Without
+	// it, nvelox treats the upstream as an untrusted peer and replaces
+	// XFF with the upstream's address, so every backend logs the proxy IP.
+	// Controller-global (one list for all sites) because the upstream
+	// fronts every Ingress; plumbed from the --trusted-proxies flag.
+	TrustedProxies []string
 }
 
 // nveloxConfig is the minimal slice of nvelox.yaml we render. Extra
@@ -113,7 +124,14 @@ type listener struct {
 	IPRateLimit   *ipRateLimitBlock `yaml:"ip_rate_limit,omitempty" json:"ip_rate_limit,omitempty"`
 	IPAllowlist   []string          `yaml:"ip_allowlist,omitempty" json:"ip_allowlist,omitempty"`
 	IPDenylist    []string          `yaml:"ip_denylist,omitempty" json:"ip_denylist,omitempty"`
-	Routes        []route           `yaml:"routes,omitempty" json:"routes,omitempty"`
+	// TrustedProxies: CIDRs whose X-Forwarded-For / X-Real-IP nvelox
+	// trusts and APPENDS to (rather than overwriting). Set when this
+	// nvelox sits BEHIND another proxy (e.g. an edge GW nvelox) so the
+	// real client IP captured upstream survives the hop instead of being
+	// replaced with the upstream's peer address. Controller-global (every
+	// generated listener gets the same list) — see Inputs.TrustedProxies.
+	TrustedProxies []string `yaml:"trusted_proxies,omitempty" json:"trusted_proxies,omitempty"`
+	Routes         []route  `yaml:"routes,omitempty" json:"routes,omitempty"`
 }
 
 // ipRateLimitBlock models nvelox's listener-level per-client-IP
@@ -502,6 +520,7 @@ func Render(in Inputs) ([]byte, error) {
 		}
 		l.IPAllowlist = sortedCIDRs(allowCIDRs["k8s-http"])
 		l.IPDenylist = sortedCIDRs(denyCIDRs["k8s-http"])
+		l.TrustedProxies = in.TrustedProxies
 		cfg.Listeners = append(cfg.Listeners, l)
 	}
 	// Stable order for the per-host HTTPS listeners.
@@ -520,6 +539,7 @@ func Render(in Inputs) ([]byte, error) {
 		}
 		l.IPAllowlist = sortedCIDRs(allowCIDRs[k])
 		l.IPDenylist = sortedCIDRs(denyCIDRs[k])
+		l.TrustedProxies = in.TrustedProxies
 		cfg.Listeners = append(cfg.Listeners, *l)
 	}
 

@@ -42,6 +42,24 @@ defaultBackend:
 publishStatus:
   enabled: true
 
+# trustedProxies — comma-separated CIDRs/IPs emitted as `trusted_proxies`
+# on EVERY generated nvelox listener. Set this when this ingress nvelox
+# runs BEHIND another proxy (e.g. an edge GW nvelox, a cloud LB) so it
+# APPENDS to the inbound X-Forwarded-For instead of OVERWRITING it. With
+# the default (empty), nvelox treats the upstream as untrusted and
+# replaces XFF with the upstream's peer address — so every backend logs
+# the proxy IP, not the real client.
+#
+# This deployment sits behind the public edge GW nvelox (10.0.0.140) and
+# the internal GW (10.0.0.131), reached over the pod/node networks, so
+# trust the internal ranges:
+#   trustedProxies: "10.0.0.0/8"
+# (covers nodes 10.0.0.x + pods 10.1.0.0/16 + both GW VIPs). Narrow it to
+# the specific GW + pod/node CIDRs if you want a tighter trust boundary.
+# NOTE: the TRUE edge (public GW) must still SEE the real client IP — set
+# trusted_proxies there too, and ensure no SNAT strips it before the edge.
+trustedProxies: "10.0.0.0/8"
+
 replicas: 1
 
 # Set true and bump replicas to 2+ for HA. Lease coordination via
@@ -102,6 +120,23 @@ service:
   # When type=NodePort and you need stable port assignments.
   httpNodePort: ""
   httpsNodePort: ""
+  # Source-IP preservation. Left empty (k8s default "Cluster") because
+  # "Local" requires the external VIP / LB target to be CO-LOCATED with an
+  # nvelox pod on the same node — otherwise kube-proxy drops traffic that
+  # lands on a node without a pod and the ingress goes DOWN (single replica
+  # + non-co-located VIP did exactly this on 2026-05-29).
+  #
+  # To preserve the real client IP you must EITHER:
+  #   (a) run the controller as a DaemonSet so every node has a pod, then
+  #       set externalTrafficPolicy: Local, OR
+  #   (b) keep Cluster here and have the EXTERNAL LB send PROXY protocol
+  #       into nvelox (requires nvelox to parse INBOUND proxy-protocol,
+  #       which it does NOT yet — would be a code change in nvelox's accept
+  #       path), OR
+  #   (c) pin the VIP to the node running the single nvelox pod, then Local.
+  # Until one of those holds, leave this empty — client IP stays the node
+  # IP but the ingress stays UP.
+  externalTrafficPolicy: ""
 
 # Pod-level controls. shareProcessNamespace is REQUIRED — the
 # controller signals nvelox via SIGHUP across containers.

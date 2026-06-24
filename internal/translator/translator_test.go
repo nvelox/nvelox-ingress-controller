@@ -1221,3 +1221,60 @@ func TestRender_BackendNameStable(t *testing.T) {
 		t.Errorf("route reference doesn't match backend name; expected %q in:\n%s", want, s)
 	}
 }
+
+// TestRender_TrustedProxies_EmittedOnEveryListener verifies the global
+// TrustedProxies list lands on EVERY generated listener (HTTP catch-all
+// + each HTTPS site). This is what makes nvelox APPEND to an upstream's
+// X-Forwarded-For instead of overwriting it — the fix for client-IP
+// loss when this nvelox runs behind an edge GW.
+func TestRender_TrustedProxies_EmittedOnEveryListener(t *testing.T) {
+	in := Inputs{
+		HTTPPort:       8080,
+		HTTPSPort:      8443,
+		TLSCertDir:     "/etc/nvelox/tls",
+		TrustedProxies: []string{"10.0.0.0/8", "192.168.0.0/16"},
+		Ingresses: []networkingv1.Ingress{
+			ingress("ns", "plain", []networkingv1.IngressRule{
+				rule("http.example.com", pathSpec{"/", "web", 80}),
+			}, nil),
+			ingress("ns", "secure", []networkingv1.IngressRule{
+				rule("tls.example.com", pathSpec{"/", "web", 80}),
+			}, map[string]string{"tls.example.com": "tls-secret"}),
+		},
+	}
+	got, err := Render(in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	s := string(got)
+	// Two listeners (one HTTP, one HTTPS) → trusted_proxies appears twice,
+	// each carrying both CIDRs.
+	if n := strings.Count(s, "trusted_proxies:"); n != 2 {
+		t.Errorf("expected trusted_proxies on 2 listeners, found %d block(s):\n%s", n, s)
+	}
+	if !strings.Contains(s, "10.0.0.0/8") || !strings.Contains(s, "192.168.0.0/16") {
+		t.Errorf("trusted_proxies CIDRs missing from output:\n%s", s)
+	}
+}
+
+// TestRender_TrustedProxies_OmittedWhenUnset guards the safe default:
+// with no TrustedProxies, the field must NOT appear (omitempty), so a
+// true-edge deployment keeps overwriting forged XFF rather than trusting
+// nobody-knows-who.
+func TestRender_TrustedProxies_OmittedWhenUnset(t *testing.T) {
+	got, err := Render(Inputs{
+		HTTPPort: 8080,
+		HTTPSPort: 8443,
+		Ingresses: []networkingv1.Ingress{
+			ingress("ns", "plain", []networkingv1.IngressRule{
+				rule("http.example.com", pathSpec{"/", "web", 80}),
+			}, nil),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.Contains(string(got), "trusted_proxies") {
+		t.Errorf("trusted_proxies must be omitted when unset:\n%s", string(got))
+	}
+}

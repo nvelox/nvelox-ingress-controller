@@ -79,6 +79,9 @@ spec:
             {{- if .Values.publishStatus.enabled }}
             - --publish-service={{ .Release.Namespace }}/{{ include "nvelox-ingress-controller.fullname" . }}
             {{- end }}
+            {{- if .Values.trustedProxies }}
+            - --trusted-proxies={{ .Values.trustedProxies }}
+            {{- end }}
             {{- if .Values.leaderElection.enabled }}
             - --leader-elect=true
             - --leader-elect-id={{ include "nvelox-ingress-controller.fullname" . }}

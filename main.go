@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -46,12 +47,13 @@ import (
 //
 // With DefaultBackendRoot set, the translator emits the catch-all 404
 // listener even with no Ingresses, which is what makes the port bind.
-func seedInitialConfig(rel *reloader.Reloader, httpPort, httpsPort int, tlsCertDir, defaultRoot string) error {
+func seedInitialConfig(rel *reloader.Reloader, httpPort, httpsPort int, tlsCertDir, defaultRoot string, trustedProxies []string) error {
 	data, err := translator.Render(translator.Inputs{
 		HTTPPort:           httpPort,
 		HTTPSPort:          httpsPort,
 		TLSCertDir:         tlsCertDir,
 		DefaultBackendRoot: defaultRoot,
+		TrustedProxies:     trustedProxies,
 	})
 	if err != nil {
 		return err
@@ -76,6 +78,7 @@ func main() {
 		tlsCertDir         string
 		defaultBackendRoot string
 		publishService     string
+		trustedProxiesRaw  string
 		httpPort           int
 		httpsPort          int
 		nveloxWait         time.Duration
@@ -96,6 +99,8 @@ func main() {
 		"Directory where the controller materializes Secret.tls.crt/tls.key for nvelox to read.")
 	flag.StringVar(&defaultBackendRoot, "default-backend-root", envOr("DEFAULT_BACKEND_ROOT", "/etc/nvelox/default-www"),
 		"Path nvelox's static catch-all uses as root. Must point at an empty directory mounted into the nvelox container — every $uri misses, fallback returns 404. Set to empty string to disable the catch-all (port refuses connections until first Ingress).")
+	flag.StringVar(&trustedProxiesRaw, "trusted-proxies", envOr("TRUSTED_PROXIES", ""),
+		"Comma-separated CIDRs/IPs emitted as `trusted_proxies` on every generated nvelox listener. Set this to the upstream proxy's source range (e.g. an edge GW nvelox + pod/node CIDRs) when this nvelox runs BEHIND another proxy, so it appends to X-Forwarded-For instead of overwriting it — required for the real client IP to survive the hop. Empty = trust no upstream (XFF replaced with peer).")
 	flag.StringVar(&publishService, "publish-service", envOr("PUBLISH_SERVICE", ""),
 		"Service (form: <namespace>/<name>) whose external address gets written back to every owned Ingress's status.loadBalancer.ingress[]. LoadBalancer → uses .status.loadBalancer; NodePort → uses Node InternalIPs; ClusterIP / empty → no status updates.")
 	flag.IntVar(&httpPort, "http-port", envIntOr("HTTP_PORT", 8080),
@@ -113,6 +118,11 @@ func main() {
 	flag.StringVar(&leaderElectionID, "leader-elect-id", "nvelox-ingress-controller",
 		"Lease name used for leader election.")
 	flag.Parse()
+
+	// Split the comma-separated --trusted-proxies into a clean slice
+	// (trim spaces, drop empties) — shared by the seed render and the
+	// reconciler so both emit the same trusted_proxies on every listener.
+	trustedProxies := splitCSV(trustedProxiesRaw)
 
 	// One JSON handler drives both stacks:
 	//   - slog.Default()       — our own log lines (slog.Info / Warn / Error)
@@ -145,7 +155,7 @@ func main() {
 	// catch-all 404 listener (when DefaultBackendRoot is set); with
 	// it empty, the render is empty and nvelox stays unbound until
 	// the first Ingress.
-	if err := seedInitialConfig(rel, httpPort, httpsPort, tlsCertDir, defaultBackendRoot); err != nil {
+	if err := seedInitialConfig(rel, httpPort, httpsPort, tlsCertDir, defaultBackendRoot, trustedProxies); err != nil {
 		slog.Warn("initial seed failed; first Ingress event will write the config", "err", err)
 	}
 
@@ -169,6 +179,7 @@ func main() {
 		TLSCertDir:         tlsCertDir,
 		DefaultBackendRoot: defaultBackendRoot,
 		PublishService:     publishService,
+		TrustedProxies:     trustedProxies,
 		Reload:             rel,
 	}
 
@@ -229,6 +240,23 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitCSV parses a comma-separated list into a trimmed, empty-free
+// slice. Returns nil for an empty/whitespace input so downstream
+// `omitempty` drops the field entirely.
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func envIntOr(k string, def int) int {
