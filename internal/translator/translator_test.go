@@ -1263,7 +1263,7 @@ func TestRender_TrustedProxies_EmittedOnEveryListener(t *testing.T) {
 // nobody-knows-who.
 func TestRender_TrustedProxies_OmittedWhenUnset(t *testing.T) {
 	got, err := Render(Inputs{
-		HTTPPort: 8080,
+		HTTPPort:  8080,
 		HTTPSPort: 8443,
 		Ingresses: []networkingv1.Ingress{
 			ingress("ns", "plain", []networkingv1.IngressRule{
