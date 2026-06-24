@@ -2,8 +2,8 @@ apiVersion: v2
 name: nvelox-ingress-controller
 description: Kubernetes Ingress controller backed by nvelox. Watches Ingress resources, translates them into nvelox YAML, hot-reloads an nvelox sidecar.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 keywords:
   - ingress
   - nvelox
