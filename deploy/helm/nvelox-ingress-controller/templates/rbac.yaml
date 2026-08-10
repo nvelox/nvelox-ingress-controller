@@ -35,6 +35,12 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch"]
+  # IngressClass parameters are read from a ConfigMap (reconciler.go loadClassDefaults).
+  # The read degrades gracefully if denied, but grant it so IngressClass params work under
+  # RBAC instead of silently no-op'ing.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]

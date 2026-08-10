@@ -45,6 +45,12 @@ type Reconciler struct {
 	DefaultBackendRoot string             // empty dir mount used as nvelox `static.root` for the catch-all 404
 	Reload             *reloader.Reloader // signals nvelox after a successful write
 
+	// WatchTLSSecrets gates all Secret access. Default false: the controller holds NO cluster
+	// Secret RBAC (least-privilege on shared/untrusted clusters — the edge terminates TLS), so
+	// it must not read Secrets. When true, Ingress tls[] blocks are materialized from Secrets
+	// (requires the SA to have scoped Secret list/watch and main.go to add the Secret watch).
+	WatchTLSSecrets bool
+
 	// PublishService is the Service whose external address (LB
 	// hostname/IP, or Node IPs for NodePort) gets written back to
 	// every owned Ingress's status.loadBalancer.ingress[]. Form:
@@ -449,6 +455,20 @@ func (r *Reconciler) owns(ing *networkingv1.Ingress) bool {
 // rotation that replaces a Secret with a new one (different name)
 // never has a window where neither file exists.
 func (r *Reconciler) syncTLSSecrets(ctx context.Context, ours []networkingv1.Ingress) error {
+	if !r.WatchTLSSecrets {
+		// TLS-from-Secrets is disabled (default): the controller holds no Secret RBAC. Reading a
+		// Secret here would fail (no informer / RBAC-denied). If an Ingress still declares tls[],
+		// warn once — its TLS is not served at this ingress (the edge terminates TLS). Enable
+		// --watch-tls-secrets + grant scoped Secret RBAC to serve TLS here.
+		for _, ing := range ours {
+			if len(ing.Spec.TLS) > 0 {
+				slog.Warn("Ingress declares tls[] but --watch-tls-secrets is off; TLS not materialized at this ingress (edge terminates TLS)",
+					"ingress", ing.Namespace+"/"+ing.Name)
+				break
+			}
+		}
+		return nil
+	}
 	if err := os.MkdirAll(r.TLSCertDir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", r.TLSCertDir, err)
 	}

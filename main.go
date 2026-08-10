@@ -86,6 +86,7 @@ func main() {
 		probeAddr          string
 		leaderElect        bool
 		leaderElectionID   string
+		watchTLSSecrets    bool
 	)
 	flag.StringVar(&ingressClass, "ingress-class", envOr("INGRESS_CLASS", "nvelox"),
 		"IngressClass name we own. Ingresses with spec.ingressClassName matching this are reconciled.")
@@ -117,6 +118,11 @@ func main() {
 		"Enable leader election. Required when running >1 replica.")
 	flag.StringVar(&leaderElectionID, "leader-elect-id", "nvelox-ingress-controller",
 		"Lease name used for leader election.")
+	flag.BoolVar(&watchTLSSecrets, "watch-tls-secrets", envOr("WATCH_TLS_SECRETS", "") == "true",
+		"Watch Secrets to materialize TLS certs for Ingress tls[] blocks. Default FALSE so the "+
+			"controller needs NO cluster-wide Secret access — least-privilege on shared/untrusted "+
+			"clusters where the edge terminates TLS. Enable ONLY when tenant Ingresses terminate TLS "+
+			"here, and grant the SA scoped Secret list/watch when you do.")
 	flag.Parse()
 
 	// Split the comma-separated --trusted-proxies into a clean slice
@@ -181,6 +187,7 @@ func main() {
 		PublishService:     publishService,
 		TrustedProxies:     trustedProxies,
 		Reload:             rel,
+		WatchTLSSecrets:    watchTLSSecrets,
 	}
 
 	// Watch Ingress as primary. Secondary watches:
@@ -195,15 +202,22 @@ func main() {
 	// All watches enqueue the SAME synthetic key — Reconcile rebuilds
 	// the whole world on each fire, so the exact triggering object
 	// doesn't matter.
-	if err := builder.ControllerManagedBy(mgr).
+	bld := builder.ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(secretToRequest)).
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(secretToRequest)).
 		// EndpointSlices feed the per-pod backend resolution
 		// (#210). Pod adds/removes / readiness flips re-fire
 		// reconcile so nvelox sees the latest pod list.
-		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(secretToRequest)).
-		Complete(r); err != nil {
+		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(secretToRequest))
+	if watchTLSSecrets {
+		// The Secret watch creates a CLUSTER-SCOPE Secret informer, which needs cluster-wide
+		// secret read (list/watch). On least-privilege / untrusted clusters that RBAC is
+		// intentionally withheld, so the informer can't sync and the manager exits. Only add it
+		// when TLS-at-this-ingress is explicitly enabled (--watch-tls-secrets); otherwise the
+		// edge terminates TLS and no Secret access is needed.
+		bld = bld.Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(secretToRequest))
+	}
+	if err := bld.Complete(r); err != nil {
 		slog.Error("controller setup failed", "err", err)
 		os.Exit(1)
 	}
