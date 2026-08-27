@@ -84,7 +84,7 @@ controller:
 nvelox:
   image:
     repository: ghcr.io/nvelox/nvelox
-    tag: v1.0.2
+    tag: v1.0.4
     pullPolicy: IfNotPresent
   # In-pod listener ports. The fronting Service maps :80 → httpPort
   # and :443 → httpsPort so neither container needs CAP_NET_BIND_SERVICE.
