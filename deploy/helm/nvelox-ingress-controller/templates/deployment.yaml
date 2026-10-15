@@ -1,7 +1,8 @@
 {{/*
 Two containers, one pod:
-  - controller: watches Ingress/Secret, writes /etc/nvelox/conf.d/k8s.yaml
-                and SIGHUPs the nvelox PID. Reads Secret data → /etc/nvelox/tls.
+  - controller: watches Ingress (and Secret, with controller.watchTLSSecrets),
+                writes /etc/nvelox/conf.d/k8s.yaml and SIGHUPs the nvelox PID.
+                With controller.watchTLSSecrets, reads Secret data → /etc/nvelox/tls.
   - nvelox:     reads /etc/nvelox/nvelox.yaml (mounted ConfigMap) + everything
                 under /etc/nvelox/conf.d/, binds 8080/8443 in-pod.
 
@@ -81,6 +82,9 @@ spec:
             {{- end }}
             {{- if .Values.trustedProxies }}
             - --trusted-proxies={{ .Values.trustedProxies }}
+            {{- end }}
+            {{- if .Values.controller.watchTLSSecrets }}
+            - --watch-tls-secrets=true
             {{- end }}
             {{- if .Values.leaderElection.enabled }}
             - --leader-elect=true

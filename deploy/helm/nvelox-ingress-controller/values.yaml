@@ -70,8 +70,14 @@ leaderElection:
 controller:
   image:
     repository: ghcr.io/nvelox/nvelox-ingress-controller
-    tag: 0.2.0  # defaults to .Chart.AppVersion
+    tag: 0.2.2  # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
+  # Serve HTTPS for Ingress spec.tls[] hosts at this ingress: the controller
+  # watches Secrets and writes each referenced kubernetes.io/tls Secret to
+  # cert/key files for nvelox. Adds --watch-tls-secrets and grants the
+  # ClusterRole cluster-wide Secret get/list/watch. Off (default): no Secret
+  # access at all and tls[] blocks are ignored (TLS terminated upstream).
+  watchTLSSecrets: false
   resources:
     requests:
       cpu: 50m
