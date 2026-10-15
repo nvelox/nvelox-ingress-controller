@@ -203,7 +203,9 @@ func main() {
 	// the whole world on each fire, so the exact triggering object
 	// doesn't matter.
 	bld := builder.ControllerManagedBy(mgr).
-		For(&networkingv1.Ingress{}).
+		// Status-only Ingress updates (our own status.loadBalancer
+		// patches included) must not re-fire reconcile.
+		For(&networkingv1.Ingress{}, builder.WithPredicates(ingress.IngressEventFilter())).
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(secretToRequest)).
 		// EndpointSlices feed the per-pod backend resolution
 		// (#210). Pod adds/removes / readiness flips re-fire

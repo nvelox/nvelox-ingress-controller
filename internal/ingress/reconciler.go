@@ -13,11 +13,13 @@
 package ingress
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/nvelox/nvelox-ingress-controller/internal/annotations"
 	"github.com/nvelox/nvelox-ingress-controller/internal/reloader"
@@ -397,6 +400,9 @@ func (r *Reconciler) fetchPublishAddresses(ctx context.Context) ([]networkingv1.
 			})
 		}
 	case corev1.ServiceTypeNodePort:
+		// The cached client's List returns Nodes in informer-map
+		// iteration order, which changes from call to call. The result
+		// is sorted below so the published status stays stable.
 		var nodes corev1.NodeList
 		if err := r.List(ctx, &nodes); err != nil {
 			return nil, fmt.Errorf("list nodes: %w", err)
@@ -410,23 +416,50 @@ func (r *Reconciler) fetchPublishAddresses(ctx context.Context) ([]networkingv1.
 			}
 		}
 	}
+	slices.SortFunc(out, compareLBIngress)
 	return out, nil
 }
 
-// ingressStatusEqual is a shallow comparator — equal iff both lists
-// have the same length and matching {IP, Hostname} entries in order.
-// Status updates already arrive in the order we wrote them, so order
-// is stable across reconciles.
+// compareLBIngress orders status entries by IP, then Hostname.
+func compareLBIngress(a, b networkingv1.IngressLoadBalancerIngress) int {
+	if c := cmp.Compare(a.IP, b.IP); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Hostname, b.Hostname)
+}
+
+// ingressStatusEqual reports whether both lists hold the same
+// {IP, Hostname} entries, ignoring order. Order must not matter: a
+// status written by an older build (or another writer) may hold the
+// same addresses in a different order, and rewriting it would be a
+// pointless apiserver write.
 func ingressStatusEqual(a, b []networkingv1.IngressLoadBalancerIngress) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for i := range a {
-		if a[i].IP != b[i].IP || a[i].Hostname != b[i].Hostname {
+	as, bs := slices.Clone(a), slices.Clone(b)
+	slices.SortFunc(as, compareLBIngress)
+	slices.SortFunc(bs, compareLBIngress)
+	for i := range as {
+		if compareLBIngress(as[i], bs[i]) != 0 {
 			return false
 		}
 	}
 	return true
+}
+
+// IngressEventFilter is the predicate for the primary Ingress watch. It
+// drops update events that change neither the spec (metadata.generation)
+// nor the annotations, i.e. status-only updates such as the
+// status.loadBalancer patches publishStatus sends. Rendering reads only
+// the spec and annotations, so those events carry nothing to reconcile,
+// and letting them through re-enqueues the Ingress after every status
+// write. Create, delete and generic events always pass.
+func IngressEventFilter() predicate.Predicate {
+	return predicate.Or[client.Object](
+		predicate.GenerationChangedPredicate{},
+		predicate.AnnotationChangedPredicate{},
+	)
 }
 
 // owns returns true when this Ingress belongs to us. Two ways to claim
