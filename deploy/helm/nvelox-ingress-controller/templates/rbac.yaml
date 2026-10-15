@@ -1,7 +1,7 @@
 {{/*
-ClusterRole — the controller watches Ingresses, Secrets, Services,
-and Endpoints across all namespaces. Pure list/watch on user resources
-(no mutation). The events permission lets controller-runtime emit
+ClusterRole — the controller watches Ingresses, Services, EndpointSlices
+and (only with controller.watchTLSSecrets) Secrets across all namespaces.
+Pure list/watch on user resources (no mutation). The events permission lets controller-runtime emit
 standard reconcile events. Coordination leases is for optional leader
 election (only used when .Values.leaderElection.enabled).
 */}}
@@ -32,9 +32,13 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+  {{- if .Values.controller.watchTLSSecrets }}
+  # Secrets are read only with --watch-tls-secrets, to materialize Ingress
+  # tls[] certs for nvelox. Off (default) = no Secret access at all.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch"]
+  {{- end }}
   # IngressClass parameters are read from a ConfigMap (reconciler.go loadClassDefaults).
   # The read degrades gracefully if denied, but grant it so IngressClass params work under
   # RBAC instead of silently no-op'ing.

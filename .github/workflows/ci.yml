@@ -63,6 +63,7 @@ jobs:
       - uses: azure/setup-helm@v4
       - run: helm lint deploy/helm/nvelox-ingress-controller
       - run: helm template t deploy/helm/nvelox-ingress-controller >/dev/null
+      - run: ./hack/chart-test.sh
 
   release:
     name: Build & Release
