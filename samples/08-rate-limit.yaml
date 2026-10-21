@@ -11,10 +11,10 @@
 # Scope caveat: nvelox's ip_rate_limit is per-LISTENER, not per-route.
 # In our render:
 #   - Each HTTPS host → its own listener → annotation isolates per-host.
-#   - HTTP traffic → ONE shared listener (k8s-http) → the most
-#     restrictive annotation across all HTTP Ingresses wins for the
-#     whole listener. Per-route comes when nvelox grows route-level
-#     rate_limit (#203 follow-up).
+#   - HTTP traffic → ONE shared listener (k8s-http) → NO ip_rate_limit.
+#     It carries cluster-internal names and the HTTP→HTTPS redirects; a
+#     per-IP limit there throttled internal callers under the forwarded
+#     client IP. Serve a host over HTTPS (spec.tls) to rate-limit it.
 
 apiVersion: apps/v1
 kind: Deployment

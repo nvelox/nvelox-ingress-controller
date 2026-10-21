@@ -56,7 +56,7 @@ All annotations use the `nvelox.io/` prefix. Invalid values are logged + skipped
 
 **CIDR scope (important):** `ip_allowlist` / `ip_denylist` are per-listener. HTTPS host = own listener = isolated filters. The shared `k8s-http` listener UNIONs both lists across contributing Ingresses; deny is safely additive but a strict allow-cidrs on one HTTP Ingress restricts every neighbour on the shared listener too. Route the strict-allowlist host through HTTPS for true isolation.
 
-**Rate-limit scope (important):** `ip_rate_limit` is per-listener in nvelox, not per-route. In the rendered config each HTTPS host has its own listener — annotation isolates per-host. The shared `k8s-http` listener gets the **most restrictive** annotation across all HTTP Ingresses that contribute to it. Per-route rate-limit comes when nvelox grows route-level `rate_limit`.
+**Rate-limit scope (important):** `ip_rate_limit` is per-listener in nvelox, not per-route. In the rendered config each HTTPS host has its own listener, so the annotation isolates per host. The shared `k8s-http` listener gets **no** `ip_rate_limit`: it carries cluster-internal names (service-to-service calls through an internal gateway) and the HTTP→HTTPS redirects. A per-IP limit there throttled internal callers, because nvelox keys it on the `X-Forwarded-For` client, so a service making calls on behalf of one visitor hit the limit under that visitor's IP. Serve public hosts over HTTPS to rate-limit them here; put per-client limits for internal paths in the apps.
 
 ## `IngressClass.spec.parameters`
 

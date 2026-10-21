@@ -226,7 +226,7 @@ The chart passes `--watch-tls-secrets` neither as a flag nor as an env var (`dep
 | Annotation | Value | Scope | Effect |
 |---|---|---|---|
 | `nvelox.io/redirect-https` | bool | Ingress, TLS hosts only | 301 to `https://${host}${uri}` on the HTTP listener (`internal/translator/translator.go:468-477`) |
-| `nvelox.io/rate-limit-per-second` | positive int | listener | `ip_rate_limit`; when several Ingresses set it, the strictest wins (`internal/translator/translator.go:291-306`, `internal/translator/translator.go:609-636`) |
+| `nvelox.io/rate-limit-per-second` | positive int | HTTPS listener | `ip_rate_limit` on the host's HTTPS listener; the shared `k8s-http` listener gets none (internal names + redirects, see docs/ingress-mapping.md) |
 | `nvelox.io/rate-limit-per-minute` | positive int | listener | Converted to ceil(n/60) rps with burst n |
 | `nvelox.io/sticky-cookie` | cookie name | backend | Cookie session affinity, TTL fixed at 1h; the first Ingress in sort order wins (`internal/translator/translator.go:396-399`, `internal/translator/translator.go:554-563`) |
 | `nvelox.io/allow-cidrs`, `nvelox.io/deny-cidrs` | CSV of CIDRs | listener | Union of all contributors into `ip_allowlist` / `ip_denylist`; invalid CIDRs dropped (`internal/annotations/annotations.go:301-322`) |

@@ -17,6 +17,8 @@ import (
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"sigs.k8s.io/yaml"
 )
 
 // ingress builds the smallest valid Ingress fixture inline. tlsSecrets
@@ -564,11 +566,11 @@ func TestRender_RateLimit_PerSecondOnly(t *testing.T) {
 	i := ingress("default", "throttled",
 		[]networkingv1.IngressRule{
 			rule("api.example.com", pathSpec{"/", "echo", 5678}),
-		}, nil)
+		}, map[string]string{"api.example.com": "api-tls"})
 	i.Annotations = map[string]string{"nvelox.io/rate-limit-per-second": "50"}
 
 	got, err := Render(Inputs{
-		HTTPPort: 8080, HTTPSPort: 8443,
+		HTTPPort: 8080, HTTPSPort: 8443, TLSCertDir: "/etc/nvelox/tls",
 		Ingresses: []networkingv1.Ingress{i},
 	})
 	if err != nil {
@@ -592,11 +594,11 @@ func TestRender_RateLimit_PerMinuteOnly(t *testing.T) {
 	i := ingress("default", "throttled-min",
 		[]networkingv1.IngressRule{
 			rule("api.example.com", pathSpec{"/", "echo", 5678}),
-		}, nil)
+		}, map[string]string{"api.example.com": "api-tls"})
 	i.Annotations = map[string]string{"nvelox.io/rate-limit-per-minute": "600"}
 
 	got, err := Render(Inputs{
-		HTTPPort: 8080, HTTPSPort: 8443,
+		HTTPPort: 8080, HTTPSPort: 8443, TLSCertDir: "/etc/nvelox/tls",
 		Ingresses: []networkingv1.Ingress{i},
 	})
 	if err != nil {
@@ -618,11 +620,11 @@ func TestRender_RateLimit_PerMinuteCeilDiv(t *testing.T) {
 	i := ingress("default", "low-min",
 		[]networkingv1.IngressRule{
 			rule("api.example.com", pathSpec{"/", "echo", 5678}),
-		}, nil)
+		}, map[string]string{"api.example.com": "api-tls"})
 	i.Annotations = map[string]string{"nvelox.io/rate-limit-per-minute": "30"}
 
 	got, err := Render(Inputs{
-		HTTPPort: 8080, HTTPSPort: 8443,
+		HTTPPort: 8080, HTTPSPort: 8443, TLSCertDir: "/etc/nvelox/tls",
 		Ingresses: []networkingv1.Ingress{i},
 	})
 	if err != nil {
@@ -640,14 +642,14 @@ func TestRender_RateLimit_BothSet_MoreRestrictiveWins(t *testing.T) {
 	i := ingress("default", "both",
 		[]networkingv1.IngressRule{
 			rule("api.example.com", pathSpec{"/", "echo", 5678}),
-		}, nil)
+		}, map[string]string{"api.example.com": "api-tls"})
 	i.Annotations = map[string]string{
 		"nvelox.io/rate-limit-per-second": "10",
 		"nvelox.io/rate-limit-per-minute": "300",
 	}
 
 	got, err := Render(Inputs{
-		HTTPPort: 8080, HTTPSPort: 8443,
+		HTTPPort: 8080, HTTPSPort: 8443, TLSCertDir: "/etc/nvelox/tls",
 		Ingresses: []networkingv1.Ingress{i},
 	})
 	if err != nil {
@@ -665,14 +667,14 @@ func TestRender_RateLimit_BothSet_PerSecondStricter(t *testing.T) {
 	i := ingress("default", "both",
 		[]networkingv1.IngressRule{
 			rule("api.example.com", pathSpec{"/", "echo", 5678}),
-		}, nil)
+		}, map[string]string{"api.example.com": "api-tls"})
 	i.Annotations = map[string]string{
 		"nvelox.io/rate-limit-per-second": "10",
 		"nvelox.io/rate-limit-per-minute": "1000",
 	}
 
 	got, err := Render(Inputs{
-		HTTPPort: 8080, HTTPSPort: 8443,
+		HTTPPort: 8080, HTTPSPort: 8443, TLSCertDir: "/etc/nvelox/tls",
 		Ingresses: []networkingv1.Ingress{i},
 	})
 	if err != nil {
@@ -684,23 +686,21 @@ func TestRender_RateLimit_BothSet_PerSecondStricter(t *testing.T) {
 	}
 }
 
-func TestRender_RateLimit_SharedHTTPListener_MostRestrictiveWins(t *testing.T) {
-	// Two HTTP-only Ingresses on the shared k8s-http listener; one
-	// asks for 100/s, the other for 10/s. Listener gets one
-	// ip_rate_limit block — the more restrictive (10/s) applies to
-	// the whole listener. Documented behavior; per-route rate-limit
-	// requires nvelox route-level rate_limit support (deferred).
+func TestRender_RateLimit_SharedHTTPListener_NoLimit(t *testing.T) {
+	// HTTP-only Ingresses land on the shared k8s-http listener, which never
+	// gets an ip_rate_limit: it carries cluster-internal names, and a per-IP
+	// limit there throttled internal callers under the forwarded client IP.
 	a := ingress("default", "ingress-loose",
 		[]networkingv1.IngressRule{
-			rule("loose.example.com", pathSpec{"/", "echo", 5678}),
+			rule("loose.example.lan", pathSpec{"/", "echo", 5678}),
 		}, nil)
 	a.Annotations = map[string]string{"nvelox.io/rate-limit-per-second": "100"}
 
 	b := ingress("default", "ingress-tight",
 		[]networkingv1.IngressRule{
-			rule("tight.example.com", pathSpec{"/", "echo", 5678}),
+			rule("tight.example.lan", pathSpec{"/", "echo", 5678}),
 		}, nil)
-	b.Annotations = map[string]string{"nvelox.io/rate-limit-per-second": "10"}
+	b.Annotations = map[string]string{"nvelox.io/rate-limit-per-minute": "600"}
 
 	got, err := Render(Inputs{
 		HTTPPort: 8080, HTTPSPort: 8443,
@@ -709,12 +709,59 @@ func TestRender_RateLimit_SharedHTTPListener_MostRestrictiveWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	s := string(got)
-	if !strings.Contains(s, "requests_per_second: 10") {
-		t.Errorf("expected most-restrictive rps=10 across shared listener, render:\n%s", s)
+	if s := string(got); strings.Contains(s, "ip_rate_limit") {
+		t.Errorf("shared k8s-http listener must not get ip_rate_limit:\n%s", s)
 	}
-	if strings.Contains(s, "requests_per_second: 100") {
-		t.Errorf("looser limit should not appear; render:\n%s", s)
+}
+
+func TestRender_RateLimit_HTTPSHostLimited_HTTPListenerNot(t *testing.T) {
+	// One Ingress with a TLS public host and a plain-HTTP internal host (the
+	// api.example.com + api.example.lan shape). The annotation limits the
+	// HTTPS listener; the shared k8s-http listener (internal host + the
+	// HTTP→HTTPS redirect) stays unlimited.
+	i := ingress("default", "api",
+		[]networkingv1.IngressRule{
+			rule("api.example.com", pathSpec{"/", "echo", 5678}),
+			rule("api.example.lan", pathSpec{"/", "echo", 5678}),
+		}, map[string]string{"api.example.com": "api-tls"})
+	i.Annotations = map[string]string{
+		"nvelox.io/rate-limit-per-minute": "20000",
+		"nvelox.io/redirect-https":        "true",
+	}
+
+	got, err := Render(Inputs{
+		HTTPPort: 8080, HTTPSPort: 8443, TLSCertDir: "/etc/nvelox/tls",
+		Ingresses: []networkingv1.Ingress{i},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var cfg struct {
+		Listeners []struct {
+			Name        string                 `json:"name"`
+			IPRateLimit map[string]interface{} `json:"ip_rate_limit"`
+		} `json:"listeners"`
+	}
+	if err := yaml.Unmarshal(got, &cfg); err != nil {
+		t.Fatalf("unmarshal render: %v\n%s", err, got)
+	}
+	var sawHTTP, sawHTTPS bool
+	for _, l := range cfg.Listeners {
+		switch {
+		case l.Name == "k8s-http":
+			sawHTTP = true
+			if l.IPRateLimit != nil {
+				t.Errorf("k8s-http listener got ip_rate_limit %v", l.IPRateLimit)
+			}
+		case strings.HasPrefix(l.Name, "https-"):
+			sawHTTPS = true
+			if l.IPRateLimit == nil || l.IPRateLimit["requests_per_second"] != float64(334) {
+				t.Errorf("HTTPS listener %s: want ip_rate_limit rps 334 (20000/min), got %v", l.Name, l.IPRateLimit)
+			}
+		}
+	}
+	if !sawHTTP || !sawHTTPS {
+		t.Fatalf("expected both a k8s-http and an https- listener, got %+v", cfg.Listeners)
 	}
 }
 
