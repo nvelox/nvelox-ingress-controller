@@ -477,7 +477,9 @@ func Render(in Inputs) ([]byte, error) {
 					}
 				} else {
 					httpRoutes = append(httpRoutes, r)
-					applyRateLimit("k8s-http", annRPS, annBurst)
+					// No applyRateLimit here: the shared plain-HTTP listener
+					// never gets an ip_rate_limit (see the k8s-http listener
+					// below). Rate-limit annotations apply to HTTPS hosts only.
 					applyCIDRs(allowCIDRs, "k8s-http", ann.AllowCIDRs)
 					applyCIDRs(denyCIDRs, "k8s-http", ann.DenyCIDRs)
 				}
@@ -512,12 +514,15 @@ func Render(in Inputs) ([]byte, error) {
 			Protocol: "http",
 			Routes:   httpRoutes,
 		}
-		if rl, ok := rateLimits["k8s-http"]; ok && rl.rps > 0 {
-			l.IPRateLimit = &ipRateLimitBlock{
-				RequestsPerSecond: rl.rps,
-				Burst:             rl.burst,
-			}
-		}
+		// No ip_rate_limit on the shared plain-HTTP listener. It carries
+		// cluster-internal names (service-to-service calls through an internal
+		// gateway) and the HTTP→HTTPS redirects; public traffic is served on
+		// the per-host HTTPS listeners, which keep their annotation's limit.
+		// A per-IP limit here throttled internal callers: nvelox keys it on
+		// the X-Forwarded-For client, so a service fanning out calls on behalf
+		// of one visitor (a dashboard rendering a page) got 429 under that
+		// visitor's IP, and every host on the listener shared the strictest
+		// annotation. Per-client limits belong at the edge and in the apps.
 		l.IPAllowlist = sortedCIDRs(allowCIDRs["k8s-http"])
 		l.IPDenylist = sortedCIDRs(denyCIDRs["k8s-http"])
 		l.TrustedProxies = in.TrustedProxies

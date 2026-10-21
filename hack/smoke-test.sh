@@ -383,8 +383,8 @@ fi
 
 # ─── Step 10: rate-limit annotations (#203) ───────────────────────
 
-log "VERIFYING nvelox.io/rate-limit-per-{second,minute} annotations (#203)"
-log "  applying Ingress with rate-limit-per-second=5"
+log "VERIFYING the shared HTTP listener is NOT rate-limited (rate-limit annotations apply to HTTPS hosts only)"
+log "  applying an HTTP-only Ingress with rate-limit-per-second=5"
 cat <<'YAML' | kubectl apply -f - >/dev/null
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -410,7 +410,7 @@ YAML
 # Give the controller a beat to reconcile + reload.
 sleep 3
 
-log "  hammering with 60 quick requests (expect a mix of 200 + 429)"
+log "  hammering with 60 quick requests over plain HTTP (expect 60 x 200, no 429)"
 codes_file="$(mktemp)"
 for i in $(seq 1 60); do
     curl -s -o /dev/null -w '%{http_code}\n' \
@@ -422,15 +422,16 @@ got_429="$(grep -c '^429$' "$codes_file" || true)"
 rm -f "$codes_file"
 
 log "  → 200 responses: $got_200  /  429 responses: $got_429"
-# The exact split depends on burst + timing, but a 5/s limit hit with
-# 60 quick requests should yield AT LEAST a handful of 429s. If we
-# see zero 429s the rate-limit annotation didn't take effect.
-if [[ "$got_429" -lt 1 ]]; then
+# The shared k8s-http listener carries cluster-internal names and the
+# HTTP→HTTPS redirects, so it gets no ip_rate_limit: a per-IP limit there
+# throttled internal callers under the forwarded client IP. Annotations
+# still limit each host's HTTPS listener (unit tests: TestRender_RateLimit_*).
+if [[ "$got_429" -gt 0 ]]; then
     kubectl -n "$NAMESPACE" exec deploy/nvelox-ingress-controller -c controller \
         -- cat /etc/nvelox/conf.d/k8s.yaml 2>/dev/null || true
-    fail "expected at least 1 HTTP 429 from 60 quick requests against rps=5; got $got_429"
+    fail "the shared HTTP listener must not rate-limit; got $got_429 x 429 from 60 requests"
 fi
-log "  → rate limit firing ✓"
+log "  → shared HTTP listener unlimited ✓"
 
 # ─── Step 11: sticky-cookie annotation (#204) ─────────────────────
 
