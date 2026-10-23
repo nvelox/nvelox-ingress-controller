@@ -29,7 +29,9 @@ metadata:
   labels:
     {{- include "nvelox-ingress-controller.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "nvelox-ingress-controller.selectorLabels" . | nindent 6 }}
@@ -59,6 +61,15 @@ spec:
       {{- with .Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.spreadAcrossNodes }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "nvelox-ingress-controller.selectorLabels" . | nindent 14 }}
       {{- end }}
       containers:
         - name: controller
