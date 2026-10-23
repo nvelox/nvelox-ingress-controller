@@ -160,8 +160,16 @@ Private registry? Uncomment the registry-login step in `.github/workflows/ci.yml
 
 ## HA
 
+Every replica renders the routes into its own nvelox and serves traffic; leader election only picks the one replica that writes Ingress status. A replica is Ready only after its first successful render.
+
 ```bash
-helm upgrade nvelox-ingress … --set replicas=2 --set leaderElection.enabled=true
+# fixed replica count
+helm upgrade nvelox-ingress … --set replicas=3 --set leaderElection.enabled=true --set spreadAcrossNodes=true
+
+# or CPU autoscaling (size nvelox.resources.requests.cpu to a real per-pod share first)
+helm upgrade nvelox-ingress … --set leaderElection.enabled=true \
+  --set autoscaling.enabled=true --set autoscaling.minReplicas=3 --set autoscaling.maxReplicas=6 \
+  --set podDisruptionBudget.enabled=true --set spreadAcrossNodes=true
 ```
 
-Leader election uses the Coordination API in the install namespace — make sure your RBAC bundle includes the `leader-election` Role (the chart adds it automatically when `leaderElection.enabled=true`).
+Leader election uses the Coordination API in the install namespace — make sure your RBAC bundle includes the `leader-election` Role (the chart adds it automatically when `leaderElection.enabled=true`). `autoscaling.enabled` refuses to render without it.

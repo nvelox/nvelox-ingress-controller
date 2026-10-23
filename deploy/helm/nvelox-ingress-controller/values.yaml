@@ -60,12 +60,32 @@ publishStatus:
 # trusted_proxies there too, and ensure no SNAT strips it before the edge.
 trustedProxies: "10.0.0.0/8"
 
-replicas: 1
+replicas: 1  # ignored when autoscaling.enabled
 
-# Set true and bump replicas to 2+ for HA. Lease coordination via
+# Every replica renders routes into its own nvelox and serves traffic; leader
+# election only picks the ONE replica that writes Ingress status. Enable it whenever
+# more than one replica runs (replicas > 1 or autoscaling). Lease coordination via the
 # Coordination API in the install namespace.
 leaderElection:
   enabled: false
+
+# CPU autoscaling of the whole pod (controller + nvelox requests). Size
+# nvelox.resources.requests.cpu to a real per-pod share: the HPA scales on
+# usage / requests. Needs leaderElection.enabled.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# Keep at least (replicas - maxUnavailable) serving during node drains / rollouts.
+podDisruptionBudget:
+  enabled: false
+  maxUnavailable: 1
+
+# Spread replicas over nodes (topologySpreadConstraints on kubernetes.io/hostname,
+# ScheduleAnyway), so one node's loss or load doesn't take every replica.
+spreadAcrossNodes: false
 
 controller:
   image:

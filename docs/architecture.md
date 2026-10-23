@@ -164,19 +164,20 @@ sequenceDiagram
     C->>FS: seed render with zero Ingresses
     C->>N: SIGHUP
     C->>API: start manager, sync caches
+    C->>FS: full render (every replica, start-up reconcile)
+    C->>N: SIGHUP
+    Note over C: readyz OK from here
     opt leader election enabled
         C->>API: acquire Lease
+        C->>API: leader only: publish Ingress status
     end
-    API-->>C: initial Ingress events
-    C->>FS: full render
-    C->>N: SIGHUP
 ```
 
 - **Waiting for nvelox.** `WaitForNvelox` polls every 500 ms for `--nvelox-wait` (30 s). A timeout only produces a warning (`main.go:155-157`, `internal/reloader/reloader.go:189-199`).
 - **Finding the PID.** The lookup tries `--pid-file` first, then scans `/proc/*/comm` for `--proc-name`, skipping PID 1 and itself (`internal/reloader/reloader.go:115-129`, `internal/reloader/reloader.go:159-183`). nvelox has a `server.pid_file` field but nothing writes it (`nvelox/config/config.go:79` is the only reference), so in practice the `/proc` scan finds the process. The scan needs `shareProcessNamespace` (`deploy/helm/nvelox-ingress-controller/templates/deployment.yaml:47`). The signal needs a shared UID: the pod-level `runAsUser: 1000` covers both containers (`deploy/helm/nvelox-ingress-controller/values.yaml:142-145`).
-- **Seed render.** It runs before the manager and always overwrites `k8s.yaml` with the empty-cluster render: just the catch-all 404 listener, when a default-backend root is set (`main.go:50-62`, `main.go:164-166`). On a fresh pod this binds the HTTP port early. If only the controller container restarts, nvelox loses all its routes and answers 404 until the first reconcile after cache sync. With leader election on, that lasts until this replica holds the Lease.
+- **Seed render.** It runs before the manager and always overwrites `k8s.yaml` with the empty-cluster render: just the catch-all 404 listener, when a default-backend root is set (`main.go:50-62`, `main.go:164-166`). On a fresh pod this binds the HTTP port early. If only the controller container restarts, nvelox loses all its routes and answers 404 until the first reconcile after cache sync; the pod reports not Ready until then (`/readyz` waits for the first successful render + reload), so the Service sends it no traffic.
 - **Hash reset.** `lastHash` lives only in memory (`internal/reloader/reloader.go:45-47`), so the first reconcile after any restart always writes and signals.
-- **Leader election does not give HA.** With `--leader-elect`, only the leader runs the reconciler (controller-runtime runs controllers on the leader only). Every replica has its own nvelox, so the non-leader pods keep the seed config and return 404 for every host, while staying Ready behind the Service. The chart nonetheless suggests leader election plus 2+ replicas for HA (`deploy/helm/nvelox-ingress-controller/values.yaml:63-68`).
+- **Every replica renders; the leader only writes status.** The reconciler is registered with `NeedLeaderElection: false`, so it runs on every replica: each pod's nvelox serves traffic from its own config. `--leader-elect` only decides which replica patches Ingress `status.loadBalancer` (`Reconciler.IsLeader`, from `mgr.Elected()`). A start-up reconcile runs on every replica after cache sync, and one more when a replica becomes leader. (Before 0.2.4 the reconciler ran on the leader only, so followers kept the seed config and returned 404 while Ready.)
 
 ## Data and state
 
@@ -240,13 +241,13 @@ The chart passes `--watch-tls-secrets` neither as a flag nor as an env var (`dep
 ## Operating it
 
 **Health, metrics, logs.**
-- **Probes.** `/healthz` and `/readyz` on `:8083` always return OK (`main.go:225-230`): they show that the process is up, not that nvelox has a config. The chart gives the nvelox container no probes (`deploy/helm/nvelox-ingress-controller/templates/deployment.yaml:111-136`).
+- **Probes.** `/healthz` on `:8083` always returns OK (the process is up). `/readyz` returns OK only after this replica's first successful render + nvelox reload (`Reconciler.Ready`). The chart gives the nvelox container no probes (`deploy/helm/nvelox-ingress-controller/templates/deployment.yaml:111-136`).
 - **Metrics.** The controller-runtime registry is on `:8082` (`main.go:170`), nvelox's on `:9090`. The pod's `prometheus.io/port` annotation names only 9090 (`deploy/helm/nvelox-ingress-controller/templates/deployment.yaml:39-43`), so annotation-based scraping misses `:8082`. nvelox counts `nvelox_reload_total{result}` inside `Engine.Reload` (`nvelox/core/engine.go:426-431`). Validation failures happen before that and are only logged (`nvelox/main.go:95-98`).
 - **Logs.** Both the controller and controller-runtime log JSON to stderr through slog (`main.go:141-143`). Lines to look for: `nvelox reloaded` (`internal/reloader/reloader.go:108`), `nvelox config updated`, `tls sync partial failure`, `ignoring invalid annotation value`.
 
 **RBAC and scaling.**
 - **Chart ClusterRole.** It grants get/list/watch on ingresses, ingressclasses, services, endpoints, endpointslices, nodes, secrets and configmaps; update/patch on `ingresses/status`; and create/patch on events (`deploy/helm/nvelox-ingress-controller/templates/rbac.yaml:14-46`). Two grants go beyond what the code needs: cluster-wide Secret read, although the flag now defaults to off, and `endpoints`, which the code never uses.
-- **Leader election.** The Lease Role exists only when leader election is enabled (`deploy/helm/nvelox-ingress-controller/templates/rbac.yaml:62-95`). Scale-out does not help today (see flow 4).
+- **Leader election.** The Lease Role exists only when leader election is enabled (`deploy/helm/nvelox-ingress-controller/templates/rbac.yaml:62-95`). Scale-out works: every replica renders routes (see flow 4); the chart can autoscale (`autoscaling.*`), add a PDB (`podDisruptionBudget.*`) and spread replicas over nodes (`spreadAcrossNodes`).
 - **Tenant ClusterRole.** It drops secrets and configmaps (`tf-infra/ansible/roles/ngris-tenant-isolation/templates/ingress-controller-deployment.yaml.j2:62-100`). That works because tenant Ingresses have no `tls[]` and the tenant IngressClass has no parameters (`tf-infra/ansible/roles/ngris-tenant-isolation/templates/ingress-controller-deployment.yaml.j2:124-132`).
 
 **Build, release, install.**

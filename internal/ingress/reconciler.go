@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -66,13 +68,29 @@ type Reconciler struct {
 	// than overwrites, the inbound X-Forwarded-For. Empty = no upstream
 	// trusted (XFF replaced with peer — the safe default for a true edge).
 	TrustedProxies []string
+
+	// IsLeader reports whether this replica may write Ingress status. Every replica
+	// reconciles and renders its OWN nvelox config (each pod serves traffic), but only
+	// one should patch status. nil = always (single replica, no leader election).
+	IsLeader func() bool
+
+	ready atomic.Bool // set after the first successful render + reload (readyz)
+	mu    sync.Mutex  // one Reconcile at a time (the controller + main.go's start-up reconciles)
 }
+
+// Ready reports whether this replica's nvelox has a rendered config applied. Until
+// then the pod must not receive traffic: it would only answer the catch-all 404.
+func (r *Reconciler) Ready() bool { return r.ready.Load() }
+
+func (r *Reconciler) leader() bool { return r.IsLeader == nil || r.IsLeader() }
 
 // Reconcile is fired on any Ingress / Secret event in the cluster. We
 // don't act on the specific object — we just rebuild the whole world.
 // The reloader's content-hash gate makes this cheap: identical desired
 // state → no file write, no SIGHUP.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	logger := slog.Default().With("trigger", req.NamespacedName.String())
 
 	var all networkingv1.IngressList
@@ -156,12 +174,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if changed {
 		logger.Info("nvelox config updated", "ingresses", len(ours))
 	}
+	r.ready.Store(true)
 
 	// Status updates: write the fronting Service's external address
 	// back onto every owned Ingress. Best-effort — a transient
 	// failure here doesn't roll back the route render. Skip when
-	// PublishService is empty (operator opted out).
-	if r.PublishService != "" {
+	// PublishService is empty (operator opted out), and on every
+	// replica but the leader (one writer).
+	if r.PublishService != "" && r.leader() {
 		if perr := r.publishStatus(ctx, ours); perr != nil {
 			logger.Warn("ingress status update partial failure", "err", perr)
 		}

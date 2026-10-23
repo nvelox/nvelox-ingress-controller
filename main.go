@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -28,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -189,6 +191,20 @@ func main() {
 		Reload:             rel,
 		WatchTLSSecrets:    watchTLSSecrets,
 	}
+	// Leader election picks ONE status writer only. Routes are rendered by every
+	// replica: each pod's nvelox serves traffic from its own config file, so a replica
+	// that skipped reconciling would answer every request with the catch-all 404
+	// (2026-10-22: 3 replicas with leader election → partial 404/502s). Elected() is
+	// closed at once when leader election is off.
+	elected := mgr.Elected()
+	r.IsLeader = func() bool {
+		select {
+		case <-elected:
+			return true
+		default:
+			return false
+		}
+	}
 
 	// Watch Ingress as primary. Secondary watches:
 	//   * Secrets — kubernetes.io/tls update (cert rotation,
@@ -219,6 +235,8 @@ func main() {
 		// edge terminates TLS and no Secret access is needed.
 		bld = bld.Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(secretToRequest))
 	}
+	// NeedLeaderElection=false: the reconciler runs on every replica (see IsLeader).
+	bld = bld.WithOptions(controller.Options{NeedLeaderElection: ptrTo(false)})
 	if err := bld.Complete(r); err != nil {
 		slog.Error("controller setup failed", "err", err)
 		os.Exit(1)
@@ -227,8 +245,24 @@ func main() {
 	if err := mgr.AddHealthzCheck("healthz", func(_ *http.Request) error { return nil }); err != nil {
 		slog.Warn("add healthz failed", "err", err)
 	}
-	if err := mgr.AddReadyzCheck("readyz", func(_ *http.Request) error { return nil }); err != nil {
+	// Ready only once this replica's nvelox has a rendered config: a rolling update or a
+	// scale-up must not send traffic to a pod that would answer the catch-all 404.
+	if err := mgr.AddReadyzCheck("readyz", func(_ *http.Request) error {
+		if !r.Ready() {
+			return errors.New("no nvelox config applied yet")
+		}
+		return nil
+	}); err != nil {
 		slog.Warn("add readyz failed", "err", err)
+	}
+	// One reconcile per replica once the caches are in sync, so readiness never waits for
+	// an Ingress/Service event; and one more when this replica becomes the leader, so the
+	// new leader publishes status without waiting for the next event.
+	for _, leaderOnly := range []bool{false, true} {
+		if err := mgr.Add(&initialReconcile{mgr: mgr, r: r, leaderOnly: leaderOnly}); err != nil {
+			slog.Error("add initial reconcile failed", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	slog.Info("nvelox-ingress-controller starting",
@@ -243,6 +277,28 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// initialReconcile runs one full reconcile after the caches sync: on every replica
+// (leaderOnly=false) or only once this replica wins the election (leaderOnly=true).
+type initialReconcile struct {
+	mgr        manager.Manager
+	r          *ingress.Reconciler
+	leaderOnly bool
+}
+
+func (i *initialReconcile) NeedLeaderElection() bool { return i.leaderOnly }
+
+func (i *initialReconcile) Start(ctx context.Context) error {
+	if !i.mgr.GetCache().WaitForCacheSync(ctx) {
+		return nil // shutting down
+	}
+	if _, err := i.r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		slog.Warn("initial reconcile failed; the next event retries", "leader_only", i.leaderOnly, "err", err)
+	}
+	return nil
+}
+
+func ptrTo[T any](v T) *T { return &v }
 
 // secretToRequest turns a Secret change into a reconcile request. The
 // reconciler ignores the specific NamespacedName (it rebuilds the
