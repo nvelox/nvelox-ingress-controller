@@ -2,6 +2,8 @@ module github.com/nvelox/nvelox-ingress-controller
 
 go 1.25
 
+toolchain go1.27.3
+
 require (
 	github.com/go-logr/logr v1.4.2
 	k8s.io/api v0.31.3

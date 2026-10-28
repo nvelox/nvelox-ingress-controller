@@ -4,7 +4,7 @@
 # step with security patches. Static binary, no CGO, -trimpath strips
 # build paths from the binary for smaller diffable layers.
 
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27-alpine AS builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
